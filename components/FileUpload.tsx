@@ -48,14 +48,21 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
         throw new Error(data.error || 'Upload failed');
       }
 
-      setUploadStatus({ success: 'File uploaded successfully!' });
+      // Check if the server renamed the file
+      const wasRenamed = data.file?.filename !== file.name;
+      
+      const successMessage = wasRenamed 
+        ? `File uploaded as "${data.file?.filename}" (renamed to avoid conflicts)`
+        : 'File uploaded successfully with original filename!';
+
+      setUploadStatus({ success: successMessage });
       setFile(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
       
       // Call the onUploadComplete callback with the filename if provided
-      onUploadComplete?.(data.filename);
+      onUploadComplete?.(data.file?.filename);
     } catch (error) {
       console.error('Upload error:', error);
       setUploadStatus({ error: 'Failed to upload file' });
