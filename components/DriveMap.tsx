@@ -7,6 +7,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.markercluster';
 import { Button } from "@/components/ui/button";
+import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
 
 interface DrivePoint {
   frameId: number;
@@ -29,15 +30,18 @@ interface DriveMapProps {
     isSampled: boolean;
   };
   onLoadMore?: () => void;
+  onMarkerAdd?: (marker: L.Marker) => void;
 }
 
-export default function DriveMap({ points, metadata, onLoadMore }: DriveMapProps) {
+export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: DriveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markerClusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'markers' | 'route'>('markers');
+  const [isAddingMarker, setIsAddingMarker] = useState(false);
+  const [isCoordinateDialogOpen, setIsCoordinateDialogOpen] = useState(false);
 
   // Sample points for route visualization
   const samplePointsForRoute = (points: DrivePoint[], sampleSize: number = 1000) => {
@@ -176,8 +180,64 @@ export default function DriveMap({ points, metadata, onLoadMore }: DriveMapProps
     return '#ef4444';                         // Red for very fast
   };
 
+  // Function to add a marker at specific coordinates
+  const addMarker = (lat: number, lng: number, options: { title?: string; description?: string } = {}) => {
+    if (!mapRef.current) return null;
+
+    const marker = L.marker([lat, lng]);
+    
+    // Create popup content
+    const popupContent = `
+      <div class="p-2">
+        ${options.title ? `<div><strong>Title:</strong> ${options.title}</div>` : ''}
+        ${options.description ? `<div><strong>Description:</strong> ${options.description}</div>` : ''}
+        <div><strong>Coordinates:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
+      </div>
+    `;
+    
+    marker.bindPopup(popupContent);
+    marker.addTo(mapRef.current);
+    
+    // Notify parent component about the new marker
+    if (onMarkerAdd) {
+      onMarkerAdd(marker);
+    }
+    
+    return marker;
+  };
+
+  // Function to enable marker placement mode
+  const enableMarkerPlacement = () => {
+    if (!mapRef.current) return;
+    
+    setIsAddingMarker(true);
+    
+    const clickHandler = (e: L.LeafletMouseEvent) => {
+      if (isAddingMarker) {
+        addMarker(e.latlng.lat, e.latlng.lng);
+        setIsAddingMarker(false);
+        mapRef.current?.off('click', clickHandler);
+      }
+    };
+    
+    mapRef.current.on('click', clickHandler);
+  };
+
+  // Function to handle coordinate dialog save
+  const handleCoordinateSave = ({ lat, lng, title, description }: { lat: number; lng: number; title?: string; description?: string }) => {
+    addMarker(lat, lng, { title, description });
+  };
+
+  // Function to add debug point
+  const addDebugPoint = () => {
+    addMarker(31.327642333333333, 35.38836366666666, {
+      title: 'Debug Point',
+      description: 'Automatically added debug point'
+    });
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
       <div className="flex justify-end gap-2 mb-2">
         <Button
           variant={viewMode === 'markers' ? 'default' : 'outline'}
@@ -193,12 +253,42 @@ export default function DriveMap({ points, metadata, onLoadMore }: DriveMapProps
         >
           Show Route
         </Button>
+        <Button
+          variant={isAddingMarker ? 'default' : 'outline'}
+          onClick={enableMarkerPlacement}
+          size="sm"
+        >
+          {isAddingMarker ? 'Click on map to place marker' : 'Add Marker'}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setIsCoordinateDialogOpen(true)}
+          size="sm"
+        >
+          Add by Coordinates
+        </Button>
+        <Button
+          variant="outline"
+          onClick={addDebugPoint}
+          size="sm"
+          className="bg-yellow-100 hover:bg-yellow-200"
+        >
+          Add Debug Point
+        </Button>
       </div>
 
       <div 
         ref={mapContainerRef} 
-        className="w-full h-[600px] rounded-lg overflow-hidden"
+        className="w-full h-[600px] rounded-lg overflow-hidden relative z-0"
       />
+      
+      <div className="relative z-50">
+        <CoordinateDialog
+          isOpen={isCoordinateDialogOpen}
+          onClose={() => setIsCoordinateDialogOpen(false)}
+          onSave={handleCoordinateSave}
+        />
+      </div>
       
       {metadata && viewMode === 'markers' && (
         <div className="flex justify-between items-center px-4 py-2 bg-stone-100 dark:bg-stone-700 rounded-lg">
