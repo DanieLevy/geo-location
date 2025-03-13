@@ -9,6 +9,10 @@ import 'leaflet.markercluster';
 import { Button } from "@/components/ui/button";
 import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
 
+// Constants for debug point
+const DEBUG_POINT_LAT = 31.327642333333333;
+const DEBUG_POINT_LNG = 35.38836366666666;
+
 interface DrivePoint {
   frameId: number;
   lat: number;
@@ -38,10 +42,69 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markerClusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const debugMarkerRef = useRef<L.Marker | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'markers' | 'route'>('markers');
   const [isAddingMarker, setIsAddingMarker] = useState(false);
   const [isCoordinateDialogOpen, setIsCoordinateDialogOpen] = useState(false);
+  const [distanceFilter, setDistanceFilter] = useState<number | null>(null);
+  const [showDistanceCircles, setShowDistanceCircles] = useState(false);
+  const distanceCirclesRef = useRef<L.Circle[]>([]);
+
+  // Calculate distance in meters between two points using Haversine formula
+  const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+    if (!mapRef.current) return 0;
+    const point1 = L.latLng(lat1, lng1);
+    const point2 = L.latLng(lat2, lng2);
+    return point1.distanceTo(point2);
+  };
+
+  // Function to add distance circles around debug point
+  const addDistanceCircles = () => {
+    if (!mapRef.current || !debugMarkerRef.current) return;
+    
+    // Clear existing circles
+    distanceCirclesRef.current.forEach(circle => {
+      if (mapRef.current) mapRef.current.removeLayer(circle);
+    });
+    distanceCirclesRef.current = [];
+    
+    // Add new circles for each distance
+    const distances = [50, 100, 150, 200];
+    const colors = ['#3388ff', '#33cc33', '#ffcc00', '#ff3333'];
+    
+    distances.forEach((distance, index) => {
+      const circle = L.circle([DEBUG_POINT_LAT, DEBUG_POINT_LNG], {
+        radius: distance,
+        color: colors[index],
+        fillColor: colors[index],
+        fillOpacity: 0.1,
+        weight: 2
+      }).addTo(mapRef.current!);
+      
+      circle.bindTooltip(`${distance}m`);
+      distanceCirclesRef.current.push(circle);
+    });
+  };
+
+  // Function to remove distance circles
+  const removeDistanceCircles = () => {
+    distanceCirclesRef.current.forEach(circle => {
+      if (mapRef.current) mapRef.current.removeLayer(circle);
+    });
+    distanceCirclesRef.current = [];
+  };
+
+  // Toggle distance circles
+  const toggleDistanceCircles = () => {
+    if (showDistanceCircles) {
+      removeDistanceCircles();
+      setShowDistanceCircles(false);
+    } else {
+      addDistanceCircles();
+      setShowDistanceCircles(true);
+    }
+  };
 
   // Sample points for route visualization
   const samplePointsForRoute = (points: DrivePoint[], sampleSize: number = 1000) => {
@@ -83,7 +146,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
     };
   }, []);
 
-  // Update map based on view mode
+  // Update map based on view mode and distance filter
   useEffect(() => {
     if (!mapRef.current || !markerClusterRef.current) return;
 
@@ -95,9 +158,39 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
     }
 
     if (viewMode === 'markers') {
-      // Add markers for each point
-      const markers = points.map(point => {
+      // Filter points based on distance if a filter is applied
+      let filteredPoints = points;
+      
+      if (distanceFilter !== null && debugMarkerRef.current) {
+        // Apply band filtering (±3m from the target distance)
+        const tolerance = 3; // 3 meters tolerance
+        filteredPoints = points.filter(point => {
+          const distance = calculateDistance(
+            point.lat, 
+            point.lng, 
+            DEBUG_POINT_LAT, 
+            DEBUG_POINT_LNG
+          );
+          return Math.abs(distance - distanceFilter) <= tolerance;
+        });
+      }
+
+      // Add markers for each filtered point
+      const markers = filteredPoints.map(point => {
         const marker = L.marker([point.lat, point.lng]);
+        
+        // Calculate distance from debug point if it exists
+        let distanceInfo = '';
+        if (debugMarkerRef.current) {
+          const distance = calculateDistance(
+            point.lat, 
+            point.lng, 
+            DEBUG_POINT_LAT, 
+            DEBUG_POINT_LNG
+          );
+          distanceInfo = `<div><strong>Distance from marker:</strong> ${distance.toFixed(2)}m</div>`;
+        }
+        
         const popupContent = `
           <div class="p-2">
             <div><strong>Frame ID:</strong> ${point.frameId}</div>
@@ -108,6 +201,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
                 ${point.speed.kmh.toFixed(2)} km/h
               </div>
             </div>
+            ${distanceInfo}
             ${point.timestamp ? `<div><strong>Time:</strong> ${new Date(point.timestamp).toLocaleString()}</div>` : ''}
           </div>
         `;
@@ -169,7 +263,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
       const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
       mapRef.current.fitBounds(bounds);
     }
-  }, [points, viewMode]);
+  }, [points, viewMode, distanceFilter]);
 
   // Helper function to get color based on speed
   const getSpeedColor = (speedKmh: number) => {
@@ -230,50 +324,120 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
 
   // Function to add debug point
   const addDebugPoint = () => {
-    addMarker(31.327642333333333, 35.38836366666666, {
+    if (debugMarkerRef.current && mapRef.current) {
+      mapRef.current.removeLayer(debugMarkerRef.current);
+    }
+
+    const marker = addMarker(DEBUG_POINT_LAT, DEBUG_POINT_LNG, {
       title: 'Debug Point',
-      description: 'Automatically added debug point'
+      description: 'Central reference point for distance calculations'
     });
+
+    if (marker) {
+      debugMarkerRef.current = marker;
+      
+      // If circles were visible, redraw them
+      if (showDistanceCircles) {
+        addDistanceCircles();
+      }
+    }
+  };
+
+  // Reset distance filter
+  const resetFilter = () => {
+    setDistanceFilter(null);
   };
 
   return (
     <div className="space-y-4 relative">
-      <div className="flex justify-end gap-2 mb-2">
-        <Button
-          variant={viewMode === 'markers' ? 'default' : 'outline'}
-          onClick={() => setViewMode('markers')}
-          size="sm"
+      <div className="flex justify-between flex-wrap gap-2 mb-2">
+        <div className="flex gap-2">
+          <Button
+            variant={viewMode === 'markers' ? 'default' : 'outline'}
+            onClick={() => setViewMode('markers')}
+            size="sm"
+          >
+            Show Markers
+          </Button>
+          <Button
+            variant={viewMode === 'route' ? 'default' : 'outline'}
+            onClick={() => setViewMode('route')}
+            size="sm"
+          >
+            Show Route
+          </Button>
+        </div>
+        
+        <div className="flex gap-2">
+          <Button
+            variant={isAddingMarker ? 'default' : 'outline'}
+            onClick={enableMarkerPlacement}
+            size="sm"
+          >
+            {isAddingMarker ? 'Click on map to place marker' : 'Add Marker'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setIsCoordinateDialogOpen(true)}
+            size="sm"
+          >
+            Add by Coordinates
+          </Button>
+          <Button
+            variant="outline"
+            onClick={addDebugPoint}
+            size="sm"
+            className="bg-yellow-100 hover:bg-yellow-200"
+          >
+            Add Debug Point
+          </Button>
+        </div>
+      </div>
+      
+      {/* Distance filtering controls */}
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <span className="text-sm font-medium">Filter frame IDs at distance (±3m):</span>
+        <Button 
+          variant={distanceFilter === 50 ? "default" : "outline"} 
+          size="sm" 
+          onClick={() => setDistanceFilter(50)}
         >
-          Show Markers
+          50m (47-53m)
         </Button>
-        <Button
-          variant={viewMode === 'route' ? 'default' : 'outline'}
-          onClick={() => setViewMode('route')}
-          size="sm"
+        <Button 
+          variant={distanceFilter === 100 ? "default" : "outline"} 
+          size="sm" 
+          onClick={() => setDistanceFilter(100)}
         >
-          Show Route
+          100m (97-103m)
         </Button>
-        <Button
-          variant={isAddingMarker ? 'default' : 'outline'}
-          onClick={enableMarkerPlacement}
-          size="sm"
+        <Button 
+          variant={distanceFilter === 150 ? "default" : "outline"} 
+          size="sm" 
+          onClick={() => setDistanceFilter(150)}
         >
-          {isAddingMarker ? 'Click on map to place marker' : 'Add Marker'}
+          150m (147-153m)
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => setIsCoordinateDialogOpen(true)}
-          size="sm"
+        <Button 
+          variant={distanceFilter === 200 ? "default" : "outline"} 
+          size="sm" 
+          onClick={() => setDistanceFilter(200)}
         >
-          Add by Coordinates
+          200m (197-203m)
         </Button>
-        <Button
-          variant="outline"
-          onClick={addDebugPoint}
-          size="sm"
-          className="bg-yellow-100 hover:bg-yellow-200"
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={resetFilter}
         >
-          Add Debug Point
+          Show All
+        </Button>
+        <Button 
+          variant={showDistanceCircles ? "default" : "outline"} 
+          size="sm" 
+          onClick={toggleDistanceCircles}
+        >
+          {showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings"}
         </Button>
       </div>
 
