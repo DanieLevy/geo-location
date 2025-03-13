@@ -42,6 +42,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markerClusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const routeElementsRef = useRef<(L.Polyline | L.Marker)[]>([]);
   const debugMarkerRef = useRef<L.Marker | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'markers' | 'route'>('markers');
@@ -50,6 +51,24 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
   const [distanceFilter, setDistanceFilter] = useState<number | null>(null);
   const [showDistanceCircles, setShowDistanceCircles] = useState(false);
   const distanceCirclesRef = useRef<L.Circle[]>([]);
+  const [accumulatedPoints, setAccumulatedPoints] = useState<DrivePoint[]>([]);
+  const [showAccumulatedPoints, setShowAccumulatedPoints] = useState(true);
+
+  // Accumulate points when they change
+  useEffect(() => {
+    if (metadata?.currentPage === 1 || !showAccumulatedPoints) {
+      // Reset accumulated points when on first page or when not showing accumulated points
+      setAccumulatedPoints(points);
+    } else {
+      // Add new points to existing ones, avoiding duplicates by frameId
+      const existingFrameIds = new Set(accumulatedPoints.map(p => p.frameId));
+      const newPoints = points.filter(point => !existingFrameIds.has(point.frameId));
+      setAccumulatedPoints(prev => [...prev, ...newPoints]);
+    }
+
+    // Reset loading state when new points are received
+    setIsLoading(false);
+  }, [points, metadata?.currentPage, showAccumulatedPoints]);
 
   // Calculate distance in meters between two points using Haversine formula
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -146,25 +165,42 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
     };
   }, []);
 
+  // Function to clear all route elements
+  const clearRouteElements = () => {
+    if (!mapRef.current) return;
+    
+    // Clear all stored route elements (polylines and markers)
+    routeElementsRef.current.forEach(element => {
+      mapRef.current?.removeLayer(element);
+    });
+    routeElementsRef.current = [];
+    
+    // Also clear the old polyline reference for backward compatibility
+    if (polylineRef.current) {
+      mapRef.current.removeLayer(polylineRef.current);
+      polylineRef.current = null;
+    }
+  };
+
   // Update map based on view mode and distance filter
   useEffect(() => {
     if (!mapRef.current || !markerClusterRef.current) return;
 
     // Clear existing markers and polyline
     markerClusterRef.current.clearLayers();
-    if (polylineRef.current) {
-      mapRef.current.removeLayer(polylineRef.current);
-      polylineRef.current = null;
-    }
+    clearRouteElements();
+
+    // Use accumulated points if showing accumulated points, otherwise use current page points
+    const displayPoints = showAccumulatedPoints ? accumulatedPoints : points;
 
     if (viewMode === 'markers') {
       // Filter points based on distance if a filter is applied
-      let filteredPoints = points;
+      let filteredPoints = displayPoints;
       
       if (distanceFilter !== null && debugMarkerRef.current) {
         // Apply band filtering (±3m from the target distance)
         const tolerance = 3; // 3 meters tolerance
-        filteredPoints = points.filter(point => {
+        filteredPoints = displayPoints.filter(point => {
           const distance = calculateDistance(
             point.lat, 
             point.lng, 
@@ -211,8 +247,9 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
 
       markerClusterRef.current.addLayers(markers);
     } else {
-      // Create route visualization
-      const sampledPoints = samplePointsForRoute(points);
+      // Create route visualization with accumulated points for better continuity
+      const pointsToUse = showAccumulatedPoints ? accumulatedPoints : points;
+      const sampledPoints = samplePointsForRoute(pointsToUse);
       const routeCoordinates = sampledPoints.map(p => [p.lat, p.lng] as [number, number]);
       
       if (routeCoordinates.length > 0) {
@@ -235,6 +272,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
           }).addTo(mapRef.current!);
 
           polyline.bindPopup(`Speed: ${segment.speed.toFixed(2)} km/h`);
+          routeElementsRef.current.push(polyline);
         });
 
         // Add start and end markers
@@ -246,6 +284,7 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
           })
         }).addTo(mapRef.current);
         startMarker.bindPopup('Start Point');
+        routeElementsRef.current.push(startMarker);
 
         const endMarker = L.marker(routeCoordinates[routeCoordinates.length - 1], {
           icon: L.divIcon({
@@ -255,15 +294,16 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
           })
         }).addTo(mapRef.current);
         endMarker.bindPopup('End Point');
+        routeElementsRef.current.push(endMarker);
       }
     }
 
     // Fit bounds if we have points
-    if (points.length > 0) {
-      const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
+    if (displayPoints.length > 0) {
+      const bounds = L.latLngBounds(displayPoints.map(p => [p.lat, p.lng]));
       mapRef.current.fitBounds(bounds);
     }
-  }, [points, viewMode, distanceFilter]);
+  }, [accumulatedPoints, points, viewMode, distanceFilter, showAccumulatedPoints]);
 
   // Helper function to get color based on speed
   const getSpeedColor = (speedKmh: number) => {
@@ -346,6 +386,30 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
   // Reset distance filter
   const resetFilter = () => {
     setDistanceFilter(null);
+  };
+
+  // Function to handle loading more points with improved page handling
+  const handleLoadMore = () => {
+    if (!isLoading && onLoadMore) {
+      setIsLoading(true);
+      onLoadMore();
+      
+      // Add a safety timeout to reset loading state if it gets stuck
+      // This is a fallback in case the points don't change for some reason
+      setTimeout(() => {
+        setIsLoading(false);
+      }, 5000); // 5 second timeout
+    }
+  };
+
+  // Function to toggle between showing accumulated points and current page only
+  const toggleAccumulatedPoints = () => {
+    setShowAccumulatedPoints(prev => !prev);
+  };
+
+  // Reset accumulated points to current page only
+  const resetAccumulatedPoints = () => {
+    setAccumulatedPoints(points);
   };
 
   return (
@@ -439,6 +503,26 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
         >
           {showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings"}
         </Button>
+
+        <Button 
+          variant={showAccumulatedPoints ? "default" : "outline"} 
+          size="sm" 
+          onClick={toggleAccumulatedPoints}
+          className="ml-4 bg-blue-100 hover:bg-blue-200"
+        >
+          {showAccumulatedPoints ? "Showing All Pages" : "Show Current Page Only"}
+        </Button>
+
+        {showAccumulatedPoints && metadata?.currentPage && metadata.currentPage > 1 && (
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={resetAccumulatedPoints}
+            className="bg-gray-100 hover:bg-gray-200"
+          >
+            Reset to Current Page
+          </Button>
+        )}
       </div>
 
       <div 
@@ -460,20 +544,22 @@ export default function DriveMap({ points, metadata, onLoadMore, onMarkerAdd }: 
             {metadata.isSampled ? (
               <span>Showing sampled data points for better performance</span>
             ) : (
-              <span>
-                Showing page {metadata.currentPage} of {metadata.totalPages}
-              </span>
+              <div className="flex flex-col">
+                <span>
+                  Page {metadata.currentPage} of {metadata.totalPages}
+                </span>
+                {showAccumulatedPoints && metadata.currentPage > 1 && (
+                  <span className="text-xs text-green-600 dark:text-green-400">
+                    Showing accumulated points from pages 1-{metadata.currentPage}
+                  </span>
+                )}
+              </div>
             )}
           </div>
           
           {!metadata.isSampled && metadata.currentPage < metadata.totalPages && (
             <button
-              onClick={() => {
-                if (!isLoading && onLoadMore) {
-                  setIsLoading(true);
-                  onLoadMore();
-                }
-              }}
+              onClick={handleLoadMore}
               disabled={isLoading}
               className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
             >
