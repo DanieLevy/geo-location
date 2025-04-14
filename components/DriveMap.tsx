@@ -16,6 +16,11 @@ import {
   FilterIcon, XIcon, Trash2Icon, Settings2Icon, CheckIcon, GaugeIcon,
 } from 'lucide-react';
 import { Separator } from "@/components/ui/separator";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { MapPin, Trash2 as TrashIcon, LocateFixed, Pin, PinOff, CheckCircle } from 'lucide-react';
+import { ObjectPointsPanel } from "./ManagedPointsPanel";
 
 // Constants for the debug point
 const DEBUG_POINT_LAT = 31.327642333333333; // Re-add constant
@@ -71,6 +76,16 @@ interface DriveMapProps {
   onMarkerAdd?: (marker: L.Marker) => void;
 }
 
+// Interface for managed objects (updated)
+interface ObjectMarker {
+  id: number; 
+  marker: L.Marker;
+  lat: number;
+  lng: number;
+  title: string;
+  isSelected: boolean; // Replaces isReference, removed isTarget
+}
+
 export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -87,8 +102,6 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const [distanceTolerance, setDistanceTolerance] = useState<number>(DEFAULT_DISTANCE_TOLERANCE); // State for tolerance (default 3m)
   const [showDistanceCircles, setShowDistanceCircles] = useState(false);
   const distanceCirclesRef = useRef<L.Circle[]>([]);
-  const [targetObjectPosition, setTargetObjectPosition] = useState<L.LatLng | null>(null);
-  const [targetObjectMarkerRef, setTargetObjectMarkerRef] = useState<L.Marker | null>(null);
   const [isJumpExportDialogOpen, setIsJumpExportDialogOpen] = useState(false);
   const [pointsForJumpExport, setPointsForJumpExport] = useState<DrivePoint[] | null>(null);
   const [sourceFilesForJumpExport, setSourceFilesForJumpExport] = useState<string[]>([]); // State for source files
@@ -98,21 +111,11 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const [manualSpeedInput, setManualSpeedInput] = useState<string>("");
   const [speedTolerance, setSpeedTolerance] = useState<number>(DEFAULT_SPEED_TOLERANCE);
 
-  // Function to reset style of a marker (example using opacity)
-  const resetMarkerStyle = (marker: L.Marker | null) => {
-    if (marker) {
-        // Replace with your actual reset logic (e.g., setIcon, setOpacity)
-        try { marker.setOpacity(1.0); } catch (e) { console.warn("Error resetting marker style:", e)}
-    }
-  };
-
-  // Function to apply target style to a marker (example using opacity)
-  const applyTargetStyle = (marker: L.Marker | null) => {
-    if (marker) {
-        // Replace with your actual target style logic
-         try { marker.setOpacity(0.6); } catch (e) { console.warn("Error applying target style:", e)}
-    }
-  };
+  // Selected Object State (NEW) - Replaces referenceMarkerInfo
+  const [selectedObjectInfo, setSelectedObjectInfo] = useState<{ marker: L.Marker | null; lat: number | null; lng: number | null }>({ marker: null, lat: null, lng: null });
+  
+  // State for Manually Added/Managed Markers -> Objects (NEW)
+  const [objectMarkers, setObjectMarkers] = useState<ObjectMarker[]>([]); // Renamed, updated type
 
   // Core map initialization effect (keep)
   useEffect(() => {
@@ -198,7 +201,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       jumpExportButton.className = "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 h-9 px-4 py-2 flex-1 bg-green-600 hover:bg-green-700 text-white";
       jumpExportButton.innerText = 'Export .jump';
       jumpExportButton.onclick = () => {
-          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster); 
+          // Use prepareMarkerDataForExport directly, cast cluster back for type compatibility
+          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster);
           if (data && data.length > 0) {
               // Extract DrivePoints needed for jump export
               const drivePointsToExport = data.map(d => d!.drivePoint).filter(Boolean) as DrivePoint[];
@@ -248,10 +252,11 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     // --- Apply Filters Sequentially --- 
     let pointsToDisplay = points; // Start with all points
 
-    // 1. Apply Distance Filter (if active and debug point exists)
-    if (distanceFilter !== null && isDebugPointVisible) {
+    // 1. Apply Distance Filter (if active and reference point exists)
+    if (distanceFilter !== null && selectedObjectInfo.lat !== null && selectedObjectInfo.lng !== null) {
       pointsToDisplay = pointsToDisplay.filter(point => {
-        const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
+        // Use reference point coordinates
+        const distance = calculateDistance(point.lat, point.lng, selectedObjectInfo.lat!, selectedObjectInfo.lng!); 
         return Math.abs(distance - distanceFilter) <= distanceTolerance;
       });
     }
@@ -272,10 +277,10 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         const marker = L.marker([point.lat, point.lng]);
         (marker as any)._drivePointData = point;
         let distanceInfo = '';
-        if (debugMarkerRef.current) {
-          const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
-          // Show distance only if debug point is visible
-          distanceInfo = `<div><strong>Dist:</strong> ${distance.toFixed(1)}m</div>`; 
+        // Calculate distance if reference point is set
+        if (selectedObjectInfo.lat !== null && selectedObjectInfo.lng !== null) { 
+          const distance = calculateDistance(point.lat, point.lng, selectedObjectInfo.lat, selectedObjectInfo.lng); 
+          distanceInfo = `<div><strong>Dist (Ref):</strong> ${distance.toFixed(1)}m</div>`;
         }
         
         // Improved Popup Content
@@ -372,27 +377,12 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             console.error("Error fitting bounds:", e, pointsToDisplay);
         }
     }
-  }, [points, viewMode, distanceFilter, speedFilter, isDebugPointVisible, distanceTolerance, speedTolerance]);
-
-  // Calculate distance in meters between two points using Haversine formula
-  const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-    const R = 6371e3; // metres
-    const φ1 = lat1 * Math.PI/180; // φ, λ in radians
-    const φ2 = lat2 * Math.PI/180;
-    const Δφ = (lat2-lat1) * Math.PI/180;
-    const Δλ = (lng2-lng1) * Math.PI/180;
-
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
-    return R * c; // in metres
-  };
+  }, [points, viewMode, distanceFilter, speedFilter, selectedObjectInfo, distanceTolerance, speedTolerance]);
 
   // Function to add distance circles around debug point
   const addDistanceCircles = useCallback(() => {
-    if (!mapRef.current || !debugMarkerRef.current) return;
+    // Check for reference marker instead of debug marker
+    if (!mapRef.current || !selectedObjectInfo.marker) return; 
     
     // Clear existing circles
     distanceCirclesRef.current.forEach(circle => {
@@ -400,8 +390,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     });
     distanceCirclesRef.current = [];
     
-    // Add new circles for each distance
-    const center = debugMarkerRef.current.getLatLng();
+    // Add new circles for each distance using reference marker position
+    const center = selectedObjectInfo.marker.getLatLng(); 
     const distances = [10, 20, 30, 50, 100];
     const colors = ['#3388ff', '#33cc33', '#ffcc00', '#ff3333'];
     
@@ -417,7 +407,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       circle.bindTooltip(`${distance}m`);
       distanceCirclesRef.current.push(circle);
     });
-  }, []);
+  }, [selectedObjectInfo.marker]);
 
   // Function to remove distance circles
   const removeDistanceCircles = useCallback(() => {
@@ -429,12 +419,13 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
 
   // Toggle distance circles
   const toggleDistanceCircles = useCallback(() => {
-    if (!debugMarkerRef.current) return;
+    // Check for reference marker instead of debug marker
+    if (!selectedObjectInfo.marker) return; 
     const willShow = !showDistanceCircles;
     setShowDistanceCircles(willShow);
     if (willShow) { addDistanceCircles(); }
     else { removeDistanceCircles(); }
-  }, [showDistanceCircles, addDistanceCircles, removeDistanceCircles]);
+  }, [showDistanceCircles, addDistanceCircles, removeDistanceCircles, selectedObjectInfo.marker]);
 
   // Sample points for route visualization
   const samplePointsForRoute = (points: DrivePoint[], sampleSize: number = 1000) => {
@@ -444,7 +435,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     return points.filter((_, index) => index % step === 0);
   };
 
-  // Function to convert data to CSV and download
+  // CSV Export - Wrap in useCallback
   const exportToCsv = useCallback((data: any[], filename: string) => {
     if (!data || data.length === 0) return;
 
@@ -507,17 +498,16 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     URL.revokeObjectURL(url);
   }, []);
 
-  // Extract data from markers and prepare for CSV export
+  // Prepare Marker Data for Export - Update distance calculation
   const prepareMarkerDataForExport = useCallback((cluster: L.MarkerCluster) => {
     const markers = cluster.getAllChildMarkers() as L.Marker[];
     const extractedData = markers.map(marker => {
-      // Get the original DrivePoint data AND KEEP IT for jump export
       const point = (marker as any)._drivePointData as DrivePoint | undefined;
       if (!point) return null;
-      
-      // Calculate distance from debug point
-      const distance = debugMarkerRef.current ? 
-        calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG) : 
+
+      // Use reference point coordinates if available
+      const distance = (selectedObjectInfo.lat !== null && selectedObjectInfo.lng !== null) ?
+        calculateDistance(point.lat, point.lng, selectedObjectInfo.lat, selectedObjectInfo.lng) :
         null;
       
       // Format timestamp into date and time if available
@@ -567,7 +557,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     }
     
     return extractedData;
-  }, [calculateDistance]); // Add calculateDistance dependency
+  // Dependency: selectedObjectInfo for distance calculation
+  }, [selectedObjectInfo]);
 
   // Function to clear all route elements
   const clearRouteElements = useCallback(() => {
@@ -591,90 +582,144 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     setViewMode(prev => prev === 'markers' ? 'route' : 'markers');
   }, []);
 
-  // --- Target Handling ---
-  const handleSetTarget = useCallback((lat: number, lng: number, marker: L.Marker) => {
-      console.log("Setting target:", lat, lng);
-      const newTargetPos = L.latLng(lat, lng);
-      setTargetObjectPosition(newTargetPos);
-      if (targetObjectMarkerRef && targetObjectMarkerRef !== marker) {
-          resetMarkerStyle(targetObjectMarkerRef);
-      }
-      applyTargetStyle(marker);
-      setTargetObjectMarkerRef(marker);
+  // RENAME handler: handleSetReference -> handleSelectObject
+  const handleSelectObject = useCallback((lat: number, lng: number, marker: L.Marker) => {
+      console.log("Setting selected object:", lat, lng);
+      const markerId = L.Util.stamp(marker);
+      
+      // Update objectMarkers state
+      setObjectMarkers(prev => prev.map(m => ({
+         ...m,
+         isSelected: m.id === markerId, 
+      })));
+
+      setSelectedObjectInfo({ marker, lat, lng });
       marker.closePopup();
-  }, [targetObjectMarkerRef]);
+      // Keep distance circles behavior (optional)
+      //setShowDistanceCircles(false); 
+      //removeDistanceCircles();
 
-  const clearTarget = useCallback(() => {
-      console.log("Clearing target");
-      setTargetObjectPosition(null);
-      if (targetObjectMarkerRef) {
-         resetMarkerStyle(targetObjectMarkerRef);
-      }
-      setTargetObjectMarkerRef(null);
-  }, [targetObjectMarkerRef]);
+  // Update dependencies
+  }, [selectedObjectInfo.marker, removeDistanceCircles, setObjectMarkers]); 
 
-  // --- Marker Creation --- (Wrapped in useCallback)
-  const addMarker = useCallback((lat: number, lng: number, options: { title?: string; description?: string; isDebug?: boolean } = {}) => {
+  // RENAME handler: clearReference -> clearSelectedObject
+  const clearSelectedObject = useCallback(() => {
+       console.log("Clearing selected object");
+       setObjectMarkers(prev => prev.map(m => ({ ...m, isSelected: false })));
+       setSelectedObjectInfo({ marker: null, lat: null, lng: null });
+       setDistanceFilter(null);
+       setShowDistanceCircles(false);
+       removeDistanceCircles();
+  // Update dependencies
+  }, [selectedObjectInfo.marker, removeDistanceCircles, setObjectMarkers]); 
+
+  // --- Managed Marker Removal (Update dependencies) ---
+  const removeManagedMarker = useCallback((idToRemove: number) => {
+     setObjectMarkers(prev => {
+       const markerToRemove = prev.find(m => m.id === idToRemove);
+       if (markerToRemove) {
+         if (mapRef.current) {
+           mapRef.current.removeLayer(markerToRemove.marker);
+         }
+         // Check if it was the selected object and clear it
+         if (markerToRemove.isSelected) {
+           clearSelectedObject(); // Use renamed clear function
+         }
+       }
+       return prev.filter(m => m.id !== idToRemove);
+     });
+  // Update dependencies
+  }, [clearSelectedObject]); 
+
+  // --- Marker Creation --- 
+  const addMarker = useCallback((lat: number, lng: number, options: { title?: string; description?: string; isDebug?: boolean /* isDebug used only for default object button */ } = {}) => {
     if (!mapRef.current) return null;
 
     const marker = L.marker([lat, lng]);
-    
+    const markerTitle = options.title || `Object @ ${lat.toFixed(4)}, ${lng.toFixed(4)}`; // Update default title
+
+    // Popup Creation
     const popupContainer = document.createElement('div');
-    popupContainer.className = "text-xs space-y-0.5 p-1 font-sans";
+    popupContainer.className = "text-xs space-y-1 p-2 font-sans min-w-[150px]";
     popupContainer.innerHTML = `
-      ${options.title ? `<div><strong>${options.title}</strong></div>` : ''}
+      ${`<div class="font-semibold mb-1">${markerTitle}</div>`}
       ${options.description ? `<div><small>${options.description}</small></div>` : ''}
-      <div><strong>Lat:</strong> ${lat.toFixed(6)}</div>
+      <div class="mt-1"><strong>Lat:</strong> ${lat.toFixed(6)}</div>
       <div><strong>Lng:</strong> ${lng.toFixed(6)}</div>
     `;
 
-    // Add "Set as Target" button only for non-debug markers
-    if (!options.isDebug) {
-        const setTargetButton = document.createElement('button');
-        setTargetButton.innerText = 'Set as Target';
-        setTargetButton.className = 'mt-1 px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600';
-        setTargetButton.onclick = (e) => {
-            e.stopPropagation(); // Prevent map click event if any
-            handleSetTarget(lat, lng, marker);
-        }
-        popupContainer.appendChild(setTargetButton);
-    }
+    // Button container - Only has Select button now
+    const buttonDiv = document.createElement('div');
+    buttonDiv.className = "flex gap-1 mt-2 pt-1 border-t border-stone-200 dark:border-stone-700";
 
-    marker.bindPopup(popupContainer, { minWidth: 120 });
+    // "Select Object" Button 
+    const selectObjButton = document.createElement('button');
+    selectObjButton.innerText = 'Select Object';
+    selectObjButton.className = 'px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex-1'; 
+    selectObjButton.style.cursor = 'pointer';
+    selectObjButton.onclick = (e) => {
+        e.stopPropagation(); 
+        handleSelectObject(lat, lng, marker); // Use renamed handler
+    }
+    buttonDiv.appendChild(selectObjButton);
+    
+    popupContainer.appendChild(buttonDiv);
+    marker.bindPopup(popupContainer, { minWidth: 150 });
     marker.addTo(mapRef.current);
 
-    // Call onMarkerAdd only if it exists and is not a debug marker
-    if (!options.isDebug && onMarkerAdd) {
+    const markerId = L.Util.stamp(marker);
+
+    // REMOVE condition: Always add the marker to the state 
+    // if (!options.isDebug) { 
+    setObjectMarkers(prev => [
+      ...prev,
+      {
+        id: markerId,
+        marker: marker,
+        lat: lat,
+        lng: lng,
+        title: markerTitle,
+        isSelected: false, // Always add as not selected initially
+      }
+    ]);
+    // }
+
+    // Call external handler if provided (for drive points?)
+    if (onMarkerAdd) {
       onMarkerAdd(marker);
     }
     
     return marker;
-  }, [onMarkerAdd, handleSetTarget]);
+  // Update dependencies
+  }, [selectedObjectInfo.marker, handleSelectObject, onMarkerAdd, setObjectMarkers]);
 
-  // --- Debug Point Handling --- (Wrapped in useCallback)
-  const addDebugPoint = useCallback(() => {
-      if (debugMarkerRef.current && mapRef.current) return; // Already added
-    const marker = addMarker(DEBUG_POINT_LAT, DEBUG_POINT_LNG, {
-      title: 'Debug Point',
-          description: 'Reference for distance calculations',
-          isDebug: true
-    });
-    if (marker) {
-      debugMarkerRef.current = marker;
-          setIsDebugPointVisible(true);
-          if (showDistanceCircles) { addDistanceCircles(); }
+  // --- Debug Point Handling -> Add Default Object ---
+  const addDefaultObject = useCallback(() => { // Rename handler
+      if (selectedObjectInfo.marker) {
+         alert("An object is already selected. Clear it first to add the default object.");
+         return;
       }
-  }, [addMarker, showDistanceCircles]);
+      // Use isDebug flag only to prevent adding the default object to the managed list initially - NO LONGER TRUE
+      // The flag might still be useful for default title/description if needed.
+      const marker = addMarker(DEBUG_POINT_LAT, DEBUG_POINT_LNG, {
+        title: 'Default Object', // Rename title
+        description: 'Default calculation reference',
+        isDebug: true // Keep flag for potential differentiation if needed elsewhere, but doesn't prevent adding to list
+      });
 
-  const removeDebugPoint = useCallback(() => {
-      if (debugMarkerRef.current && mapRef.current) {
-          mapRef.current.removeLayer(debugMarkerRef.current);
-          debugMarkerRef.current = null;
-          setIsDebugPointVisible(false);
-          removeDistanceCircles();
-          setShowDistanceCircles(false);
+      if (marker) {
+        // Select this marker as the active object
+        // We need to update the state correctly after addMarker adds it
+        const markerId = L.Util.stamp(marker);
+        setObjectMarkers(prev => prev.map(m => ({
+            ...m,
+            isSelected: m.id === markerId // Set the newly added one as selected
+        })));
+        setSelectedObjectInfo({ marker, lat: DEBUG_POINT_LAT, lng: DEBUG_POINT_LNG });
+        // No need to call handleSelectObject here, as we directly updated the state
       }
-  }, []);
+  // Update dependencies - Removed handleSelectObject, addMarker dependency remains
+  }, [selectedObjectInfo.marker, addMarker, setObjectMarkers]); 
 
   // --- Manual Marker Placement Logic REFACTORED START ---
   // Stable map click handler (depends on the stable addMarker)
@@ -887,14 +932,11 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
            const clipNumber = Math.max(1, Math.ceil(clipRaw)); 
            const clipFormatted = String(clipNumber).padStart(4, '0');
 
-           // Distance Label Logic (remains the same, uses global target/debug point)
-           let distanceLabel = 'NoTarget';
-           let refLat: number | null = null;
-           let refLng: number | null = null;
-           if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
-           else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
-           if (refLat !== null && refLng !== null) {
-               const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
+           // Distance Label Logic - Use reference point state
+           let distanceLabel = 'NoRef'; // Changed default label
+           // Use selectedObjectInfo state instead of isDebugPointVisible or targetObjectPosition
+           if (selectedObjectInfo.lat !== null && selectedObjectInfo.lng !== null) { 
+               const distance = calculateDistance(point.lat, point.lng, selectedObjectInfo.lat, selectedObjectInfo.lng);
                distanceLabel = `${Math.round(distance)}m`;
                const speedKmh = Math.round(point.speed?.kmh ?? 0);
                distanceLabel += `_${speedKmh}kmh`;
@@ -921,7 +963,14 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     }
     // End of loop through source files
 
-  }, [isDebugPointVisible, targetObjectPosition, calculateDistance]); // Dependencies might need review
+  }, [selectedObjectInfo, calculateDistance]); // Dependency updated
+
+  // --- NEW: Zoom Handler ---
+  const handleZoomTo = useCallback((lat: number, lng: number) => {
+    if (mapRef.current) {
+      mapRef.current.flyTo([lat, lng], 18); // Use flyTo for smooth zoom, adjust zoom level (18) as needed
+    }
+  }, []); // No dependencies needed as mapRef is stable
 
   // --- UI Rendering ---
   return (
@@ -948,46 +997,38 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             </Button>
           </div>
 
-          {/* Group 2: Debug & Target */}
-          <div className="flex items-center gap-2 border-l pl-4">
-            {!isDebugPointVisible ? (
-              <Button variant="outline" onClick={addDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
-                <EyeIcon className="mr-2 h-4 w-4" /> Add Debug
+          {/* Group 2: Object Selection & Rings */}
+          <div className="flex items-center gap-2 border-l pl-4 flex-shrink-0">
+             {/* Button to add default object */}
+             {!selectedObjectInfo.marker ? (
+              <Button variant="outline" onClick={addDefaultObject} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
+                <MapPin className="mr-2 h-4 w-4" /> Set Default Object
               </Button>
             ) : (
-              <Button variant="outline" onClick={removeDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
-                 <EyeOffIcon className="mr-2 h-4 w-4" /> Remove Debug
-              </Button>
+               <Button variant="outline" onClick={clearSelectedObject} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60" title={`Clear Selected: ${selectedObjectInfo.lat?.toFixed(4)}, ${selectedObjectInfo.lng?.toFixed(4)}`}>
+                 <PinOff className="mr-2 h-4 w-4" /> Clear Selection
+               </Button>
             )}
+            {/* Distance Rings Button - Depends on selected object */}
             <Button 
               variant={showDistanceCircles ? "secondary" : "outline"} 
               size="sm" 
               onClick={toggleDistanceCircles}
-              disabled={!isDebugPointVisible}
-              title={!isDebugPointVisible ? "Add debug point first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}
+              disabled={!selectedObjectInfo.marker} 
+              title={!selectedObjectInfo.marker ? "Select an object first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}
             >
               <CircleIcon className="mr-2 h-4 w-4" /> Rings
             </Button>
-             {targetObjectPosition && (
-                <Button 
-                  variant="destructive"
-                  size="sm" 
-                  onClick={clearTarget}
-                  title={`Clear Target: ${targetObjectPosition.lat.toFixed(4)}, ${targetObjectPosition.lng.toFixed(4)}`}
-                >
-                  <Trash2Icon className="mr-2 h-4 w-4" /> Clear Target
-                </Button>
-            )}
           </div>
 
           {/* Separator */}
           <Separator orientation="vertical" className="h-auto mx-2 hidden md:block" />
 
-          {/* Group 3: Filtering (Combined Distance & Speed) */}
-          <div className="flex flex-col gap-3 flex-grow min-w-[300px]">
-               {/* Distance Filtering Row */}
+           {/* Group 3: Filtering (Distance depends on Selected Object) */}
+           <div className="flex flex-col gap-3 flex-grow min-w-[300px]">
+               {/* Distance Filtering Row - Update titles/disabled states */}
                <div className="flex flex-wrap items-center gap-2">
-                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by distance from Debug Point">
+                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by distance from Selected Object">
                      <FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Dist (±
                    </span>
                    <Input
@@ -997,7 +1038,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
                      min="0" step="0.1"
                      className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
                      title="Set distance filter tolerance (meters)"
-                     disabled={!isDebugPointVisible}
+                     disabled={!selectedObjectInfo.marker} 
                    />
                    <span className="text-sm font-medium mr-2 shrink-0">m):</span>
 
@@ -1005,28 +1046,28 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
                       {[10, 20, 30, 50, 100, 200].map(dist => (
                         <Button key={`dist-${dist}`} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
                           onClick={() => handleSetPresetFilter(dist)}
-                          disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
+                          disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : `Filter ~${dist}m`} >
                           ~{dist}m
                         </Button>
                       ))}
                        <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
-                        placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
+                        placeholder="Manual (m)" disabled={!selectedObjectInfo.marker} min="0"
                         className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                        title={!isDebugPointVisible ? "Add debug point first" : "Enter distance to filter around"} />
+                        title={!selectedObjectInfo.marker ? "Select an object first" : "Enter distance to filter around"} />
                       <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
-                        disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : "Apply manual distance filter"} >
+                        disabled={!selectedObjectInfo.marker || !manualDistanceInput} title={!selectedObjectInfo.marker ? "Select an object first" : "Apply manual distance filter"} >
                         <CheckIcon className="h-4 w-4" />
                       </Button>
                        <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
                           onClick={() => handleSetPresetFilter(null)}
-                          disabled={!isDebugPointVisible}
-                          title={!isDebugPointVisible ? "Add debug point first" : "Show all points (clear distance filter)"}>
+                          disabled={!selectedObjectInfo.marker} 
+                          title={!selectedObjectInfo.marker ? "Select an object first" : "Show all points (clear distance filter)"}>
                           <XIcon className="mr-1 h-4 w-4" /> All Dist
                         </Button>
                    </div>
                </div>
 
-                {/* Speed Filtering Row (NEW) */}
+                {/* Speed Filtering Row (remains same) */}
                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by speed (km/h)">
                      <GaugeIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Speed (±
@@ -1068,49 +1109,64 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
 
       </div>
 
-       {/* Map Container */}
-       <div ref={mapContainerRef} style={{ height: '70vh', width: '100%' }} className="rounded-lg shadow-md relative z-0" />
-      
-       {/* Coordinate Dialog (keep it outside the flow) */}
-        <CoordinateDialog
-          isOpen={isCoordinateDialogOpen}
-          onClose={() => setIsCoordinateDialogOpen(false)}
-         onSave={(coords) => { addMarker(coords.lat, coords.lng, coords); }}
-       />
+       {/* --- Main Map Area (Map + Panel) --- */}
+       <div className="flex flex-col md:flex-row gap-4 items-start"> 
+         {/* Map Container */}
+         <div className="flex-grow w-full"> {/* Map takes available space */}
+           <div ref={mapContainerRef} style={{ height: '70vh' }} className="rounded-lg shadow-md relative z-0" />
+         </div>
 
-       {/* Jump Export Dialog */}
-       <JumpExportDialog
-         isOpen={isJumpExportDialogOpen}
-         sourceFiles={sourceFilesForJumpExport} // Pass the source files
-         onClose={() => {
-             setIsJumpExportDialogOpen(false);
-             setPointsForJumpExport(null); // Clear stored points
-             setSourceFilesForJumpExport([]); // Clear stored source files
-         }}
-         onSubmit={(settingsPerFile) => {
-           if (pointsForJumpExport) { // Check if points are stored
-               exportToJump(settingsPerFile, pointsForJumpExport); // Pass settingsPerFile and points
-           }
-           setIsJumpExportDialogOpen(false); // Close dialog on submit
+         {/* Object Points Panel (Side Panel) */}
+         <div className="w-full md:w-1/3 lg:w-1/4 shrink-0"> 
+            {/* Use renamed component and props */}
+            <ObjectPointsPanel 
+              objects={objectMarkers}
+              onRemove={removeManagedMarker}
+              onSelectObject={handleSelectObject}
+              onZoomTo={handleZoomTo}
+              currentSelectedId={selectedObjectInfo.marker ? L.Util.stamp(selectedObjectInfo.marker) : null}
+            />
+         </div>
+      </div>
+
+      {/* Dialogs */}
+      <CoordinateDialog
+        isOpen={isCoordinateDialogOpen}
+        onClose={() => setIsCoordinateDialogOpen(false)}
+       onSave={(coords) => { addMarker(coords.lat, coords.lng, coords); }}
+     />
+     <JumpExportDialog
+       isOpen={isJumpExportDialogOpen}
+       sourceFiles={sourceFilesForJumpExport} // Pass the source files
+       onClose={() => {
+           setIsJumpExportDialogOpen(false);
            setPointsForJumpExport(null); // Clear stored points
            setSourceFilesForJumpExport([]); // Clear stored source files
-         }}
-       />
+       }}
+       onSubmit={(settingsPerFile) => {
+         if (pointsForJumpExport) { // Check if points are stored
+             exportToJump(settingsPerFile, pointsForJumpExport); // Pass settingsPerFile and points
+         }
+         setIsJumpExportDialogOpen(false); // Close dialog on submit
+         setPointsForJumpExport(null); // Clear stored points
+         setSourceFilesForJumpExport([]); // Clear stored source files
+       }}
+     />
 
-       {/* Optional: Speed Legend for Route View */}
-      {viewMode === 'route' && (
-        <div className="px-4 py-2 bg-stone-100 dark:bg-stone-700 rounded-lg">
-           <div className="text-sm font-medium mb-2">Speed Legend (km/h):</div>
-           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-             {[ { color: '#22c55e', label: '< 20' }, { color: '#eab308', label: '20-50' }, { color: '#f97316', label: '50-80' }, { color: '#ef4444', label: '> 80' } ].map(item => (
-                <div key={item.label} className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: item.color }}></div>
-                  <span className="text-sm">{item.label}</span>
-            </div>
-             ))}
-          </div>
-        </div>
-      )}
+       {/* Speed Legend */}
+       {viewMode === 'route' && (
+         <div className="px-4 py-2 bg-stone-100 dark:bg-stone-700 rounded-lg">
+            <div className="text-sm font-medium mb-2">Speed Legend (km/h):</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[ { color: '#22c55e', label: '< 20' }, { color: '#eab308', label: '20-50' }, { color: '#f97316', label: '50-80' }, { color: '#ef4444', label: '> 80' } ].map(item => (
+                 <div key={item.label} className="flex items-center gap-2">
+                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: item.color }}></div>
+                   <span className="text-sm">{item.label}</span>
+             </div>
+              ))}
+           </div>
+         </div>
+       )}
     </div>
   );
 } 
