@@ -12,9 +12,9 @@ import { DrivePoint } from '@/lib/types'; // Assuming DrivePoint type is defined
 import { JumpExportDialog } from '@/components/JumpExportDialog';
 
 // Constants for the debug point
-const DEBUG_POINT_LAT = 31.327642333333333;
-const DEBUG_POINT_LNG = 35.38836366666666;
-const DISTANCE_FILTER_TOLERANCE = 3; // Tolerance in meters (±)
+const DEBUG_POINT_LAT = 31.327642333333333; // Re-add constant
+const DEBUG_POINT_LNG = 35.38836366666666; // Re-add constant
+// const DISTANCE_FILTER_TOLERANCE = 3; // Tolerance is now state
 const MAX_CONSECUTIVE_FRAME_ID_DIFF = 30; // Updated from 10
 const MAX_GROUPING_DISTANCE_METERS = 3.0; // Updated from 1.0
 const TIME_TOLERANCE_MS = 100; // Allow up to 100ms difference for timestamp grouping
@@ -76,6 +76,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const [isCoordinateDialogOpen, setIsCoordinateDialogOpen] = useState(false);
   const [distanceFilter, setDistanceFilter] = useState<number | null>(null); // Currently active filter distance
   const [manualDistanceInput, setManualDistanceInput] = useState<string>(""); // Value in the manual input field
+  const [distanceTolerance, setDistanceTolerance] = useState<number>(3); // State for tolerance (default 3m)
   const [showDistanceCircles, setShowDistanceCircles] = useState(false);
   const distanceCirclesRef = useRef<L.Circle[]>([]);
   const [targetObjectPosition, setTargetObjectPosition] = useState<L.LatLng | null>(null);
@@ -209,8 +210,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     const filteredPoints = (distanceFilter !== null && debugMarkerRef.current)
       ? points.filter(point => {
           const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
-          // --- Apply BAND filtering logic --- 
-          return Math.abs(distance - distanceFilter) <= DISTANCE_FILTER_TOLERANCE;
+          // --- Apply BAND filtering logic using state variable ---
+          return Math.abs(distance - distanceFilter) <= distanceTolerance;
         })
       : points;
 
@@ -306,7 +307,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             console.error("Error fitting bounds:", e, filteredPoints);
         }
     }
-  }, [points, viewMode, distanceFilter, isDebugPointVisible]); // Re-run when points, viewMode, filter, or debug point visibility changes
+  }, [points, viewMode, distanceFilter, isDebugPointVisible, distanceTolerance]); // Re-run when points, viewMode, filter, debug point visibility, or tolerance changes
 
   // Calculate distance in meters between two points using Haversine formula
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -633,6 +634,17 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   };
   // --- Distance Filter Handlers END ---
 
+  // --- Tolerance Handler ---
+  const handleToleranceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val) && val >= 0) {
+      setDistanceTolerance(val);
+    } else if (e.target.value === '') {
+      // Handle empty input - maybe set to 0 or a default? Let's use 0 for now.
+      setDistanceTolerance(0);
+    }
+  };
+
   // --- Export to Jump File Logic ---
   const exportToJump = useCallback((settings: {
     sessionName: string;
@@ -814,7 +826,22 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             {showDistanceCircles ? "Hide Dist Rings" : "Show Dist Rings"}
         </Button>
           {/* Distance Filter Controls */}
-          <span className="text-sm font-medium ml-4 border-l pl-2">Filter dist (±{DISTANCE_FILTER_TOLERANCE}m):</span>
+          <span className="text-sm font-medium ml-4 border-l pl-2">
+             Filter dist (±
+          </span>
+           <input
+             type="number"
+             value={distanceTolerance}
+             onChange={handleToleranceChange}
+             min="0"
+             step="0.1" // Allow decimal tolerance
+             className="px-1 py-0 border rounded w-16 text-sm h-7 mx-1 dark:bg-stone-700 dark:border-stone-600 disabled:opacity-50"
+             title="Set distance filter tolerance (meters)"
+             disabled={!isDebugPointVisible} // Also disable if debug point isn't visible
+           />
+          <span className="text-sm font-medium">
+            m):
+          </span>
           {[10, 20, 30, 50, 100, 200].map(dist => (
             <Button key={dist} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
               onClick={() => handleSetPresetFilter(dist)}
