@@ -9,11 +9,51 @@ import 'leaflet.markercluster';
 import { Button } from "@/components/ui/button";
 import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
 import { DrivePoint } from '@/lib/types'; // Assuming DrivePoint type is defined here
+import { JumpExportDialog } from '@/components/JumpExportDialog';
 
 // Constants for the debug point
 const DEBUG_POINT_LAT = 31.327642333333333;
 const DEBUG_POINT_LNG = 35.38836366666666;
 const DISTANCE_FILTER_TOLERANCE = 3; // Tolerance in meters (±)
+
+// --- Calculate Distance (Haversine) ---
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371e3; // metres
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2-lat1) * Math.PI/180;
+    const Δλ = (lon2-lon1) * Math.PI/180;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; // in metres
+}
+
+// --- Calculate Bearing ---
+function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const φ1 = lat1 * Math.PI/180;
+  const λ1 = lon1 * Math.PI/180;
+  const φ2 = lat2 * Math.PI/180;
+  const λ2 = lon2 * Math.PI/180;
+  const y = Math.sin(λ2-λ1) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
+  const θ = Math.atan2(y, x);
+  const brng = (θ*180/Math.PI + 360) % 360; // degrees
+  return brng;
+}
+
+// --- Normalize Angle Difference ---
+function angleDifference(angle1: number, angle2: number): number {
+    let diff = ( angle2 - angle1 + 180 ) % 360 - 180;
+    return diff < -180 ? diff + 360 : diff;
+}
+
+// --- Get Speed Color ---
+const getSpeedColor = (speedKmh: number): string => {
+    if (speedKmh < 20) return '#22c55e'; // Green
+    if (speedKmh < 50) return '#eab308'; // Yellow
+    if (speedKmh < 80) return '#f97316'; // Orange
+    return '#ef4444'; // Red
+};
 
 interface DriveMapProps {
   points: DrivePoint[];
@@ -35,6 +75,26 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const [manualDistanceInput, setManualDistanceInput] = useState<string>(""); // Value in the manual input field
   const [showDistanceCircles, setShowDistanceCircles] = useState(false);
   const distanceCirclesRef = useRef<L.Circle[]>([]);
+  const [targetObjectPosition, setTargetObjectPosition] = useState<L.LatLng | null>(null);
+  const [targetObjectMarkerRef, setTargetObjectMarkerRef] = useState<L.Marker | null>(null);
+  const [isJumpExportDialogOpen, setIsJumpExportDialogOpen] = useState(false);
+  const [pointsForJumpExport, setPointsForJumpExport] = useState<DrivePoint[] | null>(null);
+
+  // Function to reset style of a marker (example using opacity)
+  const resetMarkerStyle = (marker: L.Marker | null) => {
+    if (marker) {
+        // Replace with your actual reset logic (e.g., setIcon, setOpacity)
+        try { marker.setOpacity(1.0); } catch (e) { console.warn("Error resetting marker style:", e)}
+    }
+  };
+
+  // Function to apply target style to a marker (example using opacity)
+  const applyTargetStyle = (marker: L.Marker | null) => {
+    if (marker) {
+        // Replace with your actual target style logic
+         try { marker.setOpacity(0.6); } catch (e) { console.warn("Error applying target style:", e)}
+    }
+  };
 
   // Core map initialization effect (keep)
   useEffect(() => {
@@ -63,59 +123,63 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       const cluster = e.layer as L.MarkerCluster;
       const markerCount = cluster.getChildCount();
       
-      // Create context menu with filename input
-      const contextMenu = L.popup({
-        closeButton: true,
-        className: 'cluster-context-menu'
-      })
-        .setLatLng(e.latlng)
-        .setContent(`
-          <div class="p-2">
-            <p class="mb-2 font-semibold">Cluster contains ${markerCount} markers</p>
-            <div class="mb-2">
-              <label for="csv-filename" class="block text-sm mb-1">Filename:</label>
-              <input 
-                type="text" 
-                id="csv-filename" 
-                value="map-data" 
-                class="px-2 py-1 border rounded w-full text-sm"
-              />
-            </div>
-            <button id="export-csv-btn" class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">
-              Export to CSV
-            </button>
+      // Create DOM element for the popup content
+      const popupEl = document.createElement('div');
+      popupEl.className = 'p-2';
+      popupEl.innerHTML = `
+          <p class="mb-2 font-semibold">Cluster contains ${markerCount} markers</p>
+          <div class="mb-2">
+            <label for="csv-filename-${cluster._leaflet_id}" class="block text-sm mb-1">CSV Filename:</label>
+            <input 
+              type="text" 
+              id="csv-filename-${cluster._leaflet_id}" 
+              value="map-data" 
+              class="px-2 py-1 border rounded w-full text-sm"
+            />
           </div>
-        `)
-        .openOn(mapRef.current!);
+      `; // Use unique IDs for inputs
+
+      // Create CSV Export Button
+      const csvExportButton = document.createElement('button');
+      csvExportButton.id = `export-csv-btn-${cluster._leaflet_id}`;
+      csvExportButton.className = "px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm";
+      csvExportButton.innerText = 'Export to CSV';
+      csvExportButton.onclick = () => {
+          const filenameInput = document.getElementById(`csv-filename-${cluster._leaflet_id}`) as HTMLInputElement;
+          const data = prepareMarkerDataForExport(cluster);
+          if (data && data.length > 0) {
+            let filename = filenameInput.value.trim() || 'map-data';
+            if (!filename.endsWith('.csv')) filename += '.csv';
+            exportToCsv(data, filename);
+            contextMenu.close();
+          }
+      };
+      popupEl.appendChild(csvExportButton);
+
+      // Create Jump Export Button
+      const jumpExportButton = document.createElement('button');
+      jumpExportButton.id = `export-jump-btn-${cluster._leaflet_id}`;
+      jumpExportButton.className = "ml-2 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"; // Style differently
+      jumpExportButton.innerText = 'Export as .jump';
+      jumpExportButton.onclick = () => {
+          const data = prepareMarkerDataForExport(cluster);
+          if (data && data.length > 0) {
+              // Extract DrivePoints needed for jump export
+              const drivePointsToExport = data.map(d => d.drivePoint).filter(Boolean) as DrivePoint[];
+              setPointsForJumpExport(drivePointsToExport); // Store points for dialog
+              setIsJumpExportDialogOpen(true); // Open the dialog
+              contextMenu.close(); // Close the popup
+          } else {
+              alert("No valid data points found in this cluster to export.");
+          }
+      };
+      popupEl.appendChild(jumpExportButton);
       
-      // Add event listener to the export button
-      setTimeout(() => {
-        const exportBtn = document.getElementById('export-csv-btn');
-        const filenameInput = document.getElementById('csv-filename') as HTMLInputElement;
-        
-        if (exportBtn && filenameInput) {
-          exportBtn.addEventListener('click', () => {
-            const data = prepareMarkerDataForExport(cluster);
-            if (data && data.length > 0) {
-              // Get filename from input, with fallback
-              let filename = filenameInput.value.trim();
-              
-              // Validate filename
-              if (!filename) {
-                filename = 'map-data';
-              }
-              
-              // Ensure it has .csv extension
-              if (!filename.endsWith('.csv')) {
-                filename += '.csv';
-              }
-              
-              exportToCsv(data, filename);
-              contextMenu.close();
-            }
-          });
-        }
-      }, 100);
+      // Create and open the popup with the buttons
+      const contextMenu = L.popup({ closeButton: true, className: 'cluster-context-menu' })
+        .setLatLng(e.latlng)
+        .setContent(popupEl)
+        .openOn(mapRef.current!); 
     });
 
     mapRef.current.addLayer(markerClusterRef.current);
@@ -356,18 +420,11 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   // Extract data from markers and prepare for CSV export
   const prepareMarkerDataForExport = (cluster: L.MarkerCluster) => {
     const markers = cluster.getAllChildMarkers() as L.Marker[];
-    
-    // Get boundaries of the cluster for naming
-    const bounds = cluster.getBounds();
-    const center = bounds.getCenter();
-    
-    // Extract DrivePoint data from each marker
     const extractedData = markers.map(marker => {
-      // Get the original DrivePoint data
-      const point = (marker as any)._drivePointData as DrivePoint;
-      
+      // Get the original DrivePoint data AND KEEP IT for jump export
+      const point = (marker as any)._drivePointData as DrivePoint | undefined;
       if (!point) return null;
-      
+
       // Calculate distance from debug point
       const distance = debugMarkerRef.current ? 
         calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG) : 
@@ -376,14 +433,15 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       // Format timestamp into date and time if available
       let formattedDate = '';
       let formattedTime = '';
-      
       if (point.timestamp) {
         const date = new Date(point.timestamp);
         formattedDate = date.toLocaleDateString();
         formattedTime = date.toLocaleTimeString();
       }
       
+      // Return object including the original point for jump export
       return {
+        drivePoint: point, // Keep the original point data
         frameId: point.frameId,
         lat: point.lat,
         lng: point.lng,
@@ -397,21 +455,18 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     }).filter(Boolean);
     
     // Sort by timestamp if available
-    if (extractedData.length > 0 && extractedData[0].date) {
-      extractedData.sort((a, b) => {
-        if (!a.date || !a.time) return 1;
-        if (!b.date || !b.time) return -1;
-        const dateA = new Date(`${a.date} ${a.time}`);
-        const dateB = new Date(`${b.date} ${b.time}`);
-        return dateA.getTime() - dateB.getTime();
-      });
+    if (extractedData.length > 0 && extractedData[0]?.date) {
+        extractedData.sort((a, b) => {
+            if (!a?.drivePoint?.timestamp || !b?.drivePoint?.timestamp) return 0;
+            return new Date(a.drivePoint.timestamp).getTime() - new Date(b.drivePoint.timestamp).getTime();
+        });
     }
     
     return extractedData;
   };
 
   // Function to clear all route elements
-  const clearRouteElements = () => {
+  const clearRouteElements = useCallback(() => {
     if (!mapRef.current) return;
     
     // Clear all stored route elements (polylines and markers)
@@ -425,39 +480,74 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       mapRef.current.removeLayer(polylineRef.current);
       polylineRef.current = null;
     }
-  };
+  }, []);
 
   // Toggle view mode
-  const toggleViewMode = () => {
+  const toggleViewMode = useCallback(() => {
     setViewMode(prev => prev === 'markers' ? 'route' : 'markers');
-  };
+  }, []);
 
-  // Function to add a marker (wrapped in useCallback)
+  // --- Target Handling ---
+  const handleSetTarget = useCallback((lat: number, lng: number, marker: L.Marker) => {
+      console.log("Setting target:", lat, lng);
+      const newTargetPos = L.latLng(lat, lng);
+      setTargetObjectPosition(newTargetPos);
+      if (targetObjectMarkerRef && targetObjectMarkerRef !== marker) {
+          resetMarkerStyle(targetObjectMarkerRef);
+      }
+      applyTargetStyle(marker);
+      setTargetObjectMarkerRef(marker);
+      marker.closePopup();
+  }, [targetObjectMarkerRef]);
+
+  const clearTarget = useCallback(() => {
+      console.log("Clearing target");
+      setTargetObjectPosition(null);
+      if (targetObjectMarkerRef) {
+         resetMarkerStyle(targetObjectMarkerRef);
+      }
+      setTargetObjectMarkerRef(null);
+  }, [targetObjectMarkerRef]);
+
+  // --- Marker Creation --- (Wrapped in useCallback)
   const addMarker = useCallback((lat: number, lng: number, options: { title?: string; description?: string; isDebug?: boolean } = {}) => {
     if (!mapRef.current) return null;
 
     const marker = L.marker([lat, lng]);
     
-    const popupContent = `
-      <div class="p-2">
-        ${options.title ? `<div><strong>${options.title}</strong></div>` : ''}
-        ${options.description ? `<div><small>${options.description}</small></div>` : ''}
-        <div>Coords: ${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
-      </div>
+    const popupContainer = document.createElement('div');
+    popupContainer.className = "text-xs space-y-0.5 p-1 font-sans";
+    popupContainer.innerHTML = `
+      ${options.title ? `<div><strong>${options.title}</strong></div>` : ''}
+      ${options.description ? `<div><small>${options.description}</small></div>` : ''}
+      <div><strong>Lat:</strong> ${lat.toFixed(6)}</div>
+      <div><strong>Lng:</strong> ${lng.toFixed(6)}</div>
     `;
-    
-    marker.bindPopup(popupContent);
+
+    // Add "Set as Target" button only for non-debug markers
+    if (!options.isDebug) {
+        const setTargetButton = document.createElement('button');
+        setTargetButton.innerText = 'Set as Target';
+        setTargetButton.className = 'mt-1 px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600';
+        setTargetButton.onclick = (e) => {
+            e.stopPropagation(); // Prevent map click event if any
+            handleSetTarget(lat, lng, marker);
+        }
+        popupContainer.appendChild(setTargetButton);
+    }
+
+    marker.bindPopup(popupContainer, { minWidth: 120 });
     marker.addTo(mapRef.current);
-    
+
     // Call onMarkerAdd only if it exists and is not a debug marker
     if (!options.isDebug && onMarkerAdd) {
       onMarkerAdd(marker);
     }
     
     return marker;
-  }, [onMarkerAdd]);
+  }, [onMarkerAdd, handleSetTarget]);
 
-  // Function to add the specific debug point (uses addMarker)
+  // --- Debug Point Handling --- (Wrapped in useCallback)
   const addDebugPoint = useCallback(() => {
       if (debugMarkerRef.current && mapRef.current) return; // Already added
     const marker = addMarker(DEBUG_POINT_LAT, DEBUG_POINT_LNG, {
@@ -472,7 +562,6 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       }
   }, [addMarker, showDistanceCircles]);
 
-  // Function to remove the debug point
   const removeDebugPoint = useCallback(() => {
       if (debugMarkerRef.current && mapRef.current) {
           mapRef.current.removeLayer(debugMarkerRef.current);
@@ -541,6 +630,71 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   };
   // --- Distance Filter Handlers END ---
 
+  // --- Export to Jump File Logic ---
+  const exportToJump = useCallback((settings: {
+    sessionName: string;
+    view: string;
+    camera: string;
+    fps: number;
+  }, 
+  pointsToExport: DrivePoint[] 
+  ) => {
+    console.log(`Exporting ${pointsToExport.length} points to .jump with settings:`, settings);
+
+    if (!pointsToExport || pointsToExport.length === 0) {
+        console.warn("No points provided for jump export.");
+        alert("No points were selected for the jump export."); 
+        return;
+    }
+
+    const jumpFileContent = pointsToExport.map(point => {
+        // Calculate Clip number
+        const clipRaw = point.frameId / 60 / settings.fps;
+        const clipNumber = Math.floor(clipRaw);
+        const clipFormatted = String(clipNumber).padStart(4, '0');
+
+        // --- START: Modified Distance Label Logic ---
+        let distanceLabel = 'NoTarget'; 
+        let refLat: number | null = null;
+        let refLng: number | null = null;
+
+        if (targetObjectPosition) {
+            // Priority 1: Use explicitly set target object
+            refLat = targetObjectPosition.lat;
+            refLng = targetObjectPosition.lng;
+        } else if (isDebugPointVisible) {
+            // Priority 2: Use Debug Point if visible and no explicit target
+            refLat = DEBUG_POINT_LAT;
+            refLng = DEBUG_POINT_LNG;
+        }
+
+        // Calculate distance if a reference point was found
+        if (refLat !== null && refLng !== null) {
+            const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
+            distanceLabel = `${Math.round(distance)}m`; // Round to nearest meter
+        }
+        // --- END: Modified Distance Label Logic ---
+
+        // Construct the line
+        return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
+    }).join('\n');
+
+    // Create Blob and Trigger Download
+    const blob = new Blob([jumpFileContent], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const safeFilename = settings.sessionName.replace(/[^a-z0-9_.-]/gi, '');
+    link.setAttribute('download', `${safeFilename || 'export'}.jump`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    console.log("Jump file export triggered.");
+
+  }, [isDebugPointVisible, targetObjectPosition]); // Dependencies updated
+
+  // --- UI Rendering ---
   return (
     <div className="space-y-4">
        {/* Controls moved above the map */}
@@ -567,58 +721,50 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
           ) : (
              <Button variant="outline" onClick={removeDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200">Remove Debug Point</Button>
           )}
-          {/* Distance Circles */}
-        <Button 
-          variant={showDistanceCircles ? "default" : "outline"} 
-          size="sm" 
-          onClick={toggleDistanceCircles}
-            disabled={!isDebugPointVisible} // Disable if no debug point
-        >
-          {showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings"}
-        </Button>
-          {/* --- Distance Filter Controls START --- */}
-          <span className="text-sm font-medium ml-4 border-l pl-2">Filter distance (±{DISTANCE_FILTER_TOLERANCE}m):</span>
-          {[10, 20, 30, 50, 100, 200].map(dist => ( // Added 200m
+          {/* Clear Target Button */}
+          {targetObjectPosition && (
             <Button
-              key={dist}
-              // Style as 'default' only if this exact preset distance is the active filter
-              variant={distanceFilter === dist ? 'default' : 'outline'} 
+              variant="destructive"
               size="sm"
-              onClick={() => handleSetPresetFilter(dist)} // Use handler
-              disabled={!isDebugPointVisible} 
+              onClick={clearTarget}
+              title={`Target: ${targetObjectPosition.lat.toFixed(4)}, ${targetObjectPosition.lng.toFixed(4)}`}
+              className="ml-auto" // Push to right if space allows
             >
-              ~{dist}m {/* Indicate approximate nature */}
+              Clear Target Obj
+            </Button>
+          )}
+          {/* Distance Circles */}
+          <Button
+            variant={showDistanceCircles ? "default" : "outline"}
+            size="sm"
+            onClick={toggleDistanceCircles}
+            disabled={!isDebugPointVisible}
+            title={!isDebugPointVisible ? "Add debug point first" : ""}
+          >
+            {showDistanceCircles ? "Hide Dist Rings" : "Show Dist Rings"}
+          </Button>
+          {/* Distance Filter Controls */}
+          <span className="text-sm font-medium ml-4 border-l pl-2">Filter dist (±{DISTANCE_FILTER_TOLERANCE}m):</span>
+          {[10, 20, 30, 50, 100, 200].map(dist => (
+            <Button key={dist} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
+              onClick={() => handleSetPresetFilter(dist)}
+              disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
+              ~{dist}m
             </Button>
           ))}
-          {/* Manual Distance Input */}
-          <input 
-             type="number"
-             value={manualDistanceInput}
-             onChange={handleManualInputChange}
-             placeholder="Manual dist (m)"
-             className="px-2 py-1 border rounded w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-             disabled={!isDebugPointVisible}
-             min="1"
-          />
-          <Button
-             variant="secondary"
-             size="sm"
-             onClick={handleApplyManualFilter}
-             disabled={!isDebugPointVisible || !manualDistanceInput}
-          >
+          <input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
+             placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
+             className="px-2 py-1 border rounded w-24 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+             title={!isDebugPointVisible ? "Add debug point first" : ""} />
+          <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
+             disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : ""} >
              Filter
           </Button>
-          {/* Show All Button */}
-          <Button 
-            variant={distanceFilter === null ? 'default' : 'outline'} // Active if no filter is set
-            size="sm" 
-            onClick={() => handleSetPresetFilter(null)} // Clear filter using handler
-            // Always enabled, as it clears any filter
-          >
+          <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
+            onClick={() => handleSetPresetFilter(null)} >
             Show All
           </Button>
-          {/* --- Distance Filter Controls END --- */}
-      </div>
+       </div>
 
        {/* Map Container */}
        <div ref={mapContainerRef} style={{ height: '70vh', width: '100%' }} className="rounded-lg shadow-md relative z-0" />
@@ -628,6 +774,22 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
           isOpen={isCoordinateDialogOpen}
           onClose={() => setIsCoordinateDialogOpen(false)}
          onSave={(coords) => { addMarker(coords.lat, coords.lng, coords); }}
+       />
+
+       {/* Jump Export Dialog */}
+       <JumpExportDialog
+         isOpen={isJumpExportDialogOpen}
+         onClose={() => {
+             setIsJumpExportDialogOpen(false);
+             setPointsForJumpExport(null); // Clear stored points when closing
+         }}
+         onSubmit={(settings) => {
+           if (pointsForJumpExport) { // Check if points are stored
+               exportToJump(settings, pointsForJumpExport); // Pass stored points
+           }
+           setIsJumpExportDialogOpen(false); // Close dialog on submit
+           setPointsForJumpExport(null); // Clear stored points
+         }}
        />
 
        {/* Optional: Speed Legend for Route View */}
