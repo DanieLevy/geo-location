@@ -152,34 +152,29 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       const markers = filteredPoints.map(point => {
         const marker = L.marker([point.lat, point.lng]);
         (marker as any)._drivePointData = point;
-        
-        // Calculate distance from debug point if it exists
         let distanceInfo = '';
         if (debugMarkerRef.current) {
-          const distance = calculateDistance(
-            point.lat, 
-            point.lng, 
-            DEBUG_POINT_LAT, 
-            DEBUG_POINT_LNG
-          );
-          distanceInfo = `<div><strong>Distance from marker:</strong> ${distance.toFixed(2)}m</div>`;
+          const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
+          // Show distance only if debug point is visible
+          distanceInfo = `<div><strong>Dist:</strong> ${distance.toFixed(1)}m</div>`; 
         }
         
+        // Improved Popup Content
         const popupContent = `
-          <div class="p-2">
-            <div><strong>Frame ID:</strong> ${point.frameId}</div>
-            ${point.altitude ? `<div><strong>Altitude:</strong> ${point.altitude.toFixed(2)}m</div>` : ''}
-            <div><strong>Speed:</strong>
-              <div class="pl-2 text-sm">
-                ${point.speed.ms.toFixed(2)} m/s<br>
-                ${point.speed.kmh.toFixed(2)} km/h
-              </div>
-            </div>
+          <div class="text-xs space-y-0.5 p-1 font-sans">
+            <div><strong>ID:</strong> ${point.frameId}</div>
+            <div><strong>Lat:</strong> ${point.lat.toFixed(6)}</div>
+            <div><strong>Lng:</strong> ${point.lng.toFixed(6)}</div>
+            ${point.altitude ? `<div><strong>Alt:</strong> ${point.altitude.toFixed(1)}m</div>` : ''}
+            <div><strong>Speed:</strong> ${point.speed.kmh.toFixed(1)} km/h (${point.speed.ms.toFixed(1)} m/s)</div>
             ${distanceInfo}
-            ${point.timestamp ? `<div><strong>Time:</strong> ${new Date(point.timestamp).toLocaleString()}</div>` : ''}
-          </div>
-        `;
-        marker.bindPopup(popupContent);
+            ${point.timestamp ? `<div><strong>Time:</strong> ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
+          </div>`;
+        
+        marker.bindPopup(popupContent, { 
+            minWidth: 150, // Ensure minimum width for readability
+            // closeButton: false // Optional: remove close button for cleaner look?
+        });
         return marker;
       });
       markerClusterRef.current.addLayers(markers);
