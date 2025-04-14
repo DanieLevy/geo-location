@@ -37,12 +37,18 @@ export async function getAiChatCompletion(
 ): Promise<AiChatResponse> {
   const API_URL = getApiBaseUrl(); // Get dynamic URL
   try {
+    // Add max_tokens to request
+    const requestWithTokens = {
+      ...payload, 
+      max_tokens: 16384 // Ensure maximum token limit
+    };
+    
     const response = await fetch(`${API_URL}/api/ai/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestWithTokens),
     });
 
     if (!response.ok) {
@@ -124,41 +130,51 @@ interface AiDataChatRequest {
 // Response is the same as generic chat
 type AiDataChatResponse = AiChatResponse;
 
-export async function getAiDataChatCompletion(
-  payload: AiDataChatRequest
-): Promise<AiDataChatResponse> {
-  const API_URL = getApiBaseUrl(); // Get dynamic URL
+export async function getAiDataChatCompletion(params: {
+  filenames: string[];
+  messages: any[];
+  model?: string;
+  stream?: boolean;
+  includeMetadata?: boolean;
+}) {
   try {
-    // Prepare payload, removing model if it's null/undefined so backend uses default
-    const bodyPayload: any = { ...payload };
-    if (!bodyPayload.model) {
-      delete bodyPayload.model; 
-    }
+    console.log("[DataChat] Getting AI completion for:", params.filenames.join(", "));
     
-    // Note: We're still using JSON response for now since the backend doesn't support streaming yet
-    // In a real implementation, this would use fetch with ReadableStream for streaming
-    // This is a placeholder for future streaming implementation
-
-    const response = await fetch(`${API_URL}/api/ai/chat-with-data`, {
+    const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || getApiBaseUrl()}/api/ai/chat-with-data`;
+    
+    const requestOptions = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(bodyPayload), // Send payload potentially without model key
-    });
+      body: JSON.stringify({
+        filenames: params.filenames,
+        messages: params.messages,
+        model: params.model,
+        max_tokens: 16384, // Maximum tokens - no practical limit
+        temperature: 0.7,
+        stream: params.stream === true,
+        includeMetadata: params.includeMetadata === true
+      })
+    };
 
+    const response = await fetch(apiUrl, requestOptions);
+    
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' })); 
-      console.error('API Error in data chat:', response.status, errorData);
-      throw new Error(`API request failed with status ${response.status}: ${errorData?.error || 'Unknown data chat error'}`);
+      const errorData = await response.json().catch(() => ({ error: 'Failed to get AI response' }));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
-
-    const data: AiDataChatResponse = await response.json();
-    return data;
-
+    
+    const data = await response.json();
+    console.log("[DataChat] AI Response:", data);
+    
+    return {
+      response: data.response || "No response from AI",
+      metadata: data.metadata || null
+    };
   } catch (error: any) {
-    console.error('Error fetching AI data chat completion:', error);
-    throw new Error(`Failed to get AI data chat completion: ${error.message}`);
+    console.error("[DataChat] Error:", error);
+    throw error;
   }
 }
 

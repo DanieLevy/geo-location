@@ -78,6 +78,7 @@ const getSpeedColor = (speedKmh: number): string => {
 interface DriveMapProps {
   points: DrivePoint[];
   onMarkerAdd?: (marker: L.Marker) => void;
+  highlightedPoints?: number[]; // Add support for highlighted points
 }
 
 // Interface for managed objects (updated)
@@ -90,13 +91,14 @@ interface ObjectMarker {
   isSelected: boolean; // Replaces isReference, removed isTarget
 }
 
-export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
+export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: DriveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markerClusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
   const routeElementsRef = useRef<(L.Polyline | L.Marker)[]>([]);
   const debugMarkerRef = useRef<L.Marker | null>(null);
+  const highlightedMarkersRef = useRef<L.CircleMarker[]>([]);
   const [isDebugPointVisible, setIsDebugPointVisible] = useState(false); // State to track debug point
   const [viewMode, setViewMode] = useState<'markers' | 'route'>('markers');
   const [isAddingMarker, setIsAddingMarker] = useState(false);
@@ -977,6 +979,61 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       mapRef.current.flyTo([lat, lng], 18); // Use flyTo for smooth zoom, adjust zoom level (18) as needed
     }
   }, []); // No dependencies needed as mapRef is stable
+
+  // New effect to handle highlighted points from the AI
+  useEffect(() => {
+    if (!mapRef.current || !points || points.length === 0) return;
+    
+    // Clear previous highlights
+    highlightedMarkersRef.current.forEach(marker => {
+      if (mapRef.current) mapRef.current.removeLayer(marker);
+    });
+    highlightedMarkersRef.current = [];
+    
+    // If there are no highlights, just return
+    if (!highlightedPoints || highlightedPoints.length === 0) return;
+    
+    // Create highlights for the specified points
+    highlightedPoints.forEach(index => {
+      if (index >= 0 && index < points.length) {
+        const point = points[index];
+        if (point && point.lat && point.lng) {
+          // Create a highlighted marker
+          const highlightMarker = L.circleMarker([point.lat, point.lng], {
+            radius: 15,
+            color: '#ff3b30',
+            weight: 3,
+            opacity: 0.8,
+            fillColor: '#ff9500',
+            fillOpacity: 0.3,
+            className: 'pulse-marker'
+          }).addTo(mapRef.current!);
+          
+          // Attach a popup with information
+          highlightMarker.bindPopup(`
+            <div class="p-2">
+              <div class="font-bold mb-1">Point #${index}</div>
+              <div>Lat: ${point.lat.toFixed(6)}</div>
+              <div>Lng: ${point.lng.toFixed(6)}</div>
+              ${point.speedKmh ? `<div>Speed: ${point.speedKmh.toFixed(1)} km/h</div>` : ''}
+              ${point.timestamp ? `<div>Time: ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
+            </div>
+          `);
+          
+          // Store the marker for later cleanup
+          highlightedMarkersRef.current.push(highlightMarker);
+        }
+      }
+    });
+    
+    // If there are highlights, try to pan to the first one
+    if (highlightedMarkersRef.current.length > 0) {
+      const bounds = L.latLngBounds(
+        highlightedMarkersRef.current.map(marker => marker.getLatLng())
+      );
+      mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+    }
+  }, [highlightedPoints, points]);
 
   // --- UI Rendering ---
   return (
