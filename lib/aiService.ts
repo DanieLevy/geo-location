@@ -12,11 +12,30 @@ interface AiChatResponse {
   response: string; // The AI's generated text
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'; // Use env var or default
+// --- Helper to get the correct API Base URL ---
+function getApiBaseUrl(): string {
+  // 1. Check environment variable first (most reliable for deployments)
+  const envUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (envUrl) {
+    // Ensure it doesn't end with a slash
+    return envUrl.replace(/\/$/, '');
+  }
+
+  // 2. If in browser, use the current hostname
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    // Use standard http protocol and known backend port (5000)
+    return `http://${hostname}:5000`;
+  }
+
+  // 3. Default fallback (e.g., for server-side rendering or build steps)
+  return 'http://localhost:5000';
+}
 
 export async function getAiChatCompletion(
   payload: AiChatRequest
 ): Promise<AiChatResponse> {
+  const API_URL = getApiBaseUrl(); // Get dynamic URL
   try {
     const response = await fetch(`${API_URL}/api/ai/chat`, {
       method: 'POST',
@@ -50,6 +69,7 @@ interface AiDriveSummaryResponse {
 export async function getAiDriveSummary(
   filenames: string[]
 ): Promise<AiDriveSummaryResponse> {
+  const API_URL = getApiBaseUrl(); // Get dynamic URL
   try {
     const response = await fetch(`${API_URL}/api/ai/summarize-drive`, {
       method: 'POST',
@@ -98,6 +118,7 @@ interface AiDataChatRequest {
   filenames: string[];
   messages: ChatMessage[]; 
   model?: string | null; // Allow specifying the model (or null/undefined for default)
+  stream?: boolean; // Option to stream the response
 }
 
 // Response is the same as generic chat
@@ -106,12 +127,17 @@ type AiDataChatResponse = AiChatResponse;
 export async function getAiDataChatCompletion(
   payload: AiDataChatRequest
 ): Promise<AiDataChatResponse> {
+  const API_URL = getApiBaseUrl(); // Get dynamic URL
   try {
     // Prepare payload, removing model if it's null/undefined so backend uses default
     const bodyPayload: any = { ...payload };
     if (!bodyPayload.model) {
       delete bodyPayload.model; 
     }
+    
+    // Note: We're still using JSON response for now since the backend doesn't support streaming yet
+    // In a real implementation, this would use fetch with ReadableStream for streaming
+    // This is a placeholder for future streaming implementation
 
     const response = await fetch(`${API_URL}/api/ai/chat-with-data`, {
       method: 'POST',
@@ -138,6 +164,7 @@ export async function getAiDataChatCompletion(
 
 // --- NEW: Function to get available AI models ---
 export async function getAiModels(): Promise<AiModelListResponse> {
+  const API_URL = getApiBaseUrl(); // Get dynamic URL
   try {
     const response = await fetch(`${API_URL}/api/ai/models`, {
       method: 'GET',
