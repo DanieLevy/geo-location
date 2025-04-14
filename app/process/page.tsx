@@ -1,17 +1,22 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import dynamic from 'next/dynamic';
 import { DrivePoint } from '@/lib/types';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-import { getAiDriveSummary } from "@/lib/aiService";
+import { getAiDriveSummary, getAiDataChatCompletion, getAiModels, AiModelInfo } from "@/lib/aiService";
+import { cn } from '@/lib/utils';
 
 const DriveMap = dynamic(
   () => import('@/components/DriveMap'),
@@ -30,6 +35,11 @@ interface BackendResponseMetadata {
   // validationErrors?: any[]; // Keep validation errors structure flexible
 }
 
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export default function ProcessPage() {
   const searchParams = useSearchParams();
   const filesQuery = searchParams.get('files'); 
@@ -44,6 +54,17 @@ export default function ProcessPage() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryText, setSummaryText] = useState<string | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  const [aiModels, setAiModels] = useState<AiModelInfo[]>([]);
+  const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     if (filenames.length === 0) {
@@ -85,7 +106,26 @@ export default function ProcessPage() {
 
   useEffect(() => {
     fetchData();
-  }, [fetchData]); 
+
+    const fetchModels = async () => {
+      setModelsLoading(true);
+      setModelsError(null);
+      try {
+        const modelData = await getAiModels();
+        setAiModels(modelData.data || []);
+        const defaultLoadedModel = modelData.data?.find(m => m.state === 'loaded' && (m.type === 'llm' || m.type === 'vlm'));
+        if (defaultLoadedModel) {
+          setSelectedChatModel(defaultLoadedModel.id);
+        }
+      } catch (err: any) {
+        console.error("Failed to fetch AI models:", err);
+        setModelsError(err.message || "Could not load model list from LM Studio");
+      } finally {
+        setModelsLoading(false);
+      }
+    };
+    fetchModels();
+  }, [fetchData]);
 
   const handleGetSummary = async () => {
     if (!filenames || filenames.length === 0) return;
@@ -104,6 +144,40 @@ export default function ProcessPage() {
       setSummaryLoading(false);
     }
   };
+
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim() || !filenames || filenames.length === 0) return;
+
+    const newUserMessage: ChatMessage = { role: 'user', content: chatInput };
+    const updatedMessages = [...chatMessages, newUserMessage];
+
+    setChatMessages(updatedMessages);
+    setChatInput("");
+    setChatLoading(true);
+    setChatError(null);
+
+    try {
+      const payload = {
+        filenames,
+        messages: updatedMessages,
+        model: selectedChatModel,
+      };
+      const result = await getAiDataChatCompletion(payload);
+      const aiResponseMessage: ChatMessage = { role: 'assistant', content: result.response };
+      setChatMessages(prev => [...prev, aiResponseMessage]);
+    } catch (err: any) {
+      console.error("AI Data Chat Error:", err);
+      setChatError(err.message || "Failed to get response from AI chat");
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
 
   const handleBackToHome = () => {
     window.location.href = '/';
@@ -226,6 +300,75 @@ export default function ProcessPage() {
         )}
 
         {showDebug && renderDebugInfo()}
+
+        <Card className="mb-6">
+          <CardHeader>
+            <div className="flex justify-between items-start">
+              <div className="flex-1 mr-4">
+                <CardTitle className="flex items-center mb-1">
+                  <Bot className="mr-2 h-5 w-5 text-blue-600 dark:text-blue-400" />
+                  Chat About Drive Data
+                </CardTitle>
+                <CardDescription>Ask questions about the loaded CSV file(s).</CardDescription>
+              </div>
+              <div className="w-full max-w-[250px]">
+                <Label htmlFor="chat-model-select" className="text-xs text-stone-500 dark:text-stone-400 mb-1 block">Chat Model:</Label>
+                <Select value={selectedChatModel ?? undefined} onValueChange={(value) => setSelectedChatModel(value)} disabled={modelsLoading || aiModels.length === 0}>
+                  <SelectTrigger id="chat-model-select" className="h-9">
+                    <SelectValue placeholder={modelsLoading ? "Loading models..." : (modelsError ? "Error loading" : "Select model")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelsError ? (
+                      <SelectItem value="error" disabled>{modelsError}</SelectItem>
+                    ) : (
+                      aiModels.filter(m => m.type === 'llm' || m.type === 'vlm').map(model => (
+                        <SelectItem key={model.id} value={model.id} title={model.id}>
+                          <div className="flex items-center justify-between w-full">
+                            <span className="truncate max-w-[180px]">{model.id}</span>
+                            <Badge variant={model.state === 'loaded' ? 'default' : 'outline'} className="ml-2 text-xs px-1.5 py-0.5">{model.state}</Badge>
+                          </div>
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[300px] w-full border rounded-md p-4 mb-4 bg-stone-50 dark:bg-stone-900" ref={chatContainerRef}>
+              <div className="space-y-4">
+                {chatMessages.map((message, index) => (
+                  <div key={index} className={cn("flex items-start gap-3", message.role === 'user' ? 'justify-end' : '')}>
+                    <div className={cn("p-3 rounded-lg max-w-[75%]", message.role === 'user' ? 'bg-blue-600 text-white dark:bg-blue-700' : 'bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100')}>
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    </div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div className="flex items-start gap-3">
+                    <div className="p-3 rounded-lg bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+            {chatError && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Chat Error</AlertTitle>
+                <AlertDescription>{chatError}</AlertDescription>
+              </Alert>
+            )}
+            <div className="flex gap-2">
+              <Input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Ask about the data..." className="flex-1" disabled={chatLoading} onKeyDown={(e) => e.key === 'Enter' && !chatLoading && handleSendChatMessage()} />
+              <Button onClick={handleSendChatMessage} disabled={chatLoading || !chatInput.trim()}>
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {!error && (
           <div className="space-y-4">
