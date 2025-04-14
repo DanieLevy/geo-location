@@ -15,6 +15,9 @@ import { JumpExportDialog } from '@/components/JumpExportDialog';
 const DEBUG_POINT_LAT = 31.327642333333333;
 const DEBUG_POINT_LNG = 35.38836366666666;
 const DISTANCE_FILTER_TOLERANCE = 3; // Tolerance in meters (±)
+const MAX_CONSECUTIVE_FRAME_ID_DIFF = 30; // Updated from 10
+const MAX_GROUPING_DISTANCE_METERS = 3.0; // Updated from 1.0
+const TIME_TOLERANCE_MS = 100; // Allow up to 100ms difference for timestamp grouping
 
 // --- Calculate Distance (Haversine) ---
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -424,7 +427,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       // Get the original DrivePoint data AND KEEP IT for jump export
       const point = (marker as any)._drivePointData as DrivePoint | undefined;
       if (!point) return null;
-
+      
       // Calculate distance from debug point
       const distance = debugMarkerRef.current ? 
         calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG) : 
@@ -456,10 +459,10 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     
     // Sort by timestamp if available
     if (extractedData.length > 0 && extractedData[0]?.date) {
-        extractedData.sort((a, b) => {
+      extractedData.sort((a, b) => {
             if (!a?.drivePoint?.timestamp || !b?.drivePoint?.timestamp) return 0;
             return new Date(a.drivePoint.timestamp).getTime() - new Date(b.drivePoint.timestamp).getTime();
-        });
+      });
     }
     
     return extractedData;
@@ -604,7 +607,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     setIsAddingMarker(true);
   };
   const disableMarkerPlacement = () => {
-    setIsAddingMarker(false);
+        setIsAddingMarker(false);
   };
   // --- Manual Marker Placement Logic REFACTORED END ---
 
@@ -639,9 +642,9 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   }, 
   pointsToExport: DrivePoint[] 
   ) => {
-    console.log(`Exporting ${pointsToExport.length} points to .jump with settings:`, settings);
+    console.log(`Exporting ${pointsToExport.length} points from cluster to .jump with settings:`, settings);
 
-    if (!points || points.length === 0) { // Check the original points array for first frame ID
+    if (!points || points.length === 0) {
         console.warn("Original points array is empty, cannot determine first frame ID.");
         alert("Cannot export: Original data is missing.");
         return;
@@ -652,42 +655,98 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         return;
     }
 
-    // Find the very first frame ID from the original, unfiltered data
     const firstFrameId = Math.min(...points.map(p => p.frameId));
     console.log("Using first frame ID for clip calculation:", firstFrameId);
 
-    const jumpFileLines = pointsToExport.map(point => {
-        // --- START: Updated Clip Calculation using Math.ceil ---
+    // --- START: New Grouping and Filtering Logic ---
+    const pointsByClip = new Map<number, DrivePoint[]>();
+
+    // 1. Calculate clip and group points
+    pointsToExport.forEach(point => {
         const frameDifference = point.frameId - firstFrameId;
-        const nonNegativeFrameDiff = Math.max(0, frameDifference); 
-        
+        const nonNegativeFrameDiff = Math.max(0, frameDifference);
         const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
-        // Use Math.ceil as requested
+        const clipNumber = Math.ceil(clipRaw); // Use Math.ceil
+
+        if (!pointsByClip.has(clipNumber)) {
+            pointsByClip.set(clipNumber, []);
+        }
+        pointsByClip.get(clipNumber)!.push(point);
+    });
+
+    // 2. Select representative from each clip group based on time separation
+    const finalExportPoints: DrivePoint[] = [];
+    const sortedClipNumbers = Array.from(pointsByClip.keys()).sort((a, b) => a - b);
+    const MIN_TIME_DIFF_MS = 5000; // 5 seconds minimum separation
+
+    sortedClipNumbers.forEach(clipNumber => {
+        const group = pointsByClip.get(clipNumber)!;
+        // Sort points within the group by frameId to process chronologically
+        group.sort((a, b) => a.frameId - b.frameId);
+
+        let lastKeptPoint: DrivePoint | null = null;
+
+        group.forEach(currentPoint => {
+            if (!lastKeptPoint) {
+                // Always keep the first point of the group
+                finalExportPoints.push(currentPoint);
+                lastKeptPoint = currentPoint;
+    } else {
+                // Check time difference from the last kept point
+                if (currentPoint.timestamp && lastKeptPoint.timestamp) {
+                    try {
+                        const timeCurrent = new Date(currentPoint.timestamp).getTime();
+                        const timeLastKept = new Date(lastKeptPoint.timestamp).getTime();
+                        if (!isNaN(timeCurrent) && !isNaN(timeLastKept)) {
+                            if (Math.abs(timeCurrent - timeLastKept) > MIN_TIME_DIFF_MS) {
+                                finalExportPoints.push(currentPoint);
+                                lastKeptPoint = currentPoint;
+                            }
+                        }
+                        // Else: if timestamps are invalid, we implicitly skip?
+                    } catch (e) {
+                        console.error("Error parsing timestamp during export filtering:", e);
+                        // Skip this point if timestamps are bad?
+                    }
+                } 
+                // Else: if timestamps are missing, skip?
+            }
+        });
+    });
+    // --- END: New Grouping and Filtering Logic ---
+
+    console.log(`Selected ${finalExportPoints.length} points for export after time filtering.`);
+
+    if (finalExportPoints.length === 0) { // Check the final list
+        alert("No representative points found after grouping and time filtering.");
+        return;
+    }
+
+    // 3. Generate jump file lines using finalExportPoints
+    const jumpFileLines = finalExportPoints.map(point => {
+        // Recalculate clip formatted string for the representative point
+        const frameDifference = point.frameId - firstFrameId;
+        const nonNegativeFrameDiff = Math.max(0, frameDifference);
+        const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
         const clipNumber = Math.ceil(clipRaw); 
         const clipFormatted = String(clipNumber).padStart(4, '0');
-        // --- END: Updated Clip Calculation ---
 
-        // --- Distance Label Logic --- 
-        let distanceLabel = 'NoTarget'; 
+        // Distance Label Logic
+        let distanceLabel = 'NoTarget';
         let refLat: number | null = null;
         let refLng: number | null = null;
         if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
         else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
-        
-        if (refLat !== null && refLng !== null) { 
+        if (refLat !== null && refLng !== null) {
             const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
-            // Start with the distance part
             distanceLabel = `${Math.round(distance)}m`;
-            // Append the speed part
             const speedKmh = Math.round(point.speed.kmh);
-            distanceLabel += `_${speedKmh}kmh`; 
+            distanceLabel += `_${speedKmh}kmh`;
         }
-        
-        // Construct the line
+
         return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
     });
 
-    // --- Add Footer Line --- 
     const jumpFileContent = jumpFileLines.join('\n') + '\n#format: trackfile camera frameIDStartFrame tag';
 
     // Create Blob and Trigger Download
@@ -703,7 +762,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     URL.revokeObjectURL(url);
     console.log("Jump file export triggered.");
 
-  }, [points, isDebugPointVisible, targetObjectPosition]); // Added original 'points' to dependencies
+  }, [points, isDebugPointVisible, targetObjectPosition]);
 
   // --- UI Rendering ---
   return (
@@ -713,19 +772,19 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
           {/* View Mode */}
           <Button onClick={toggleViewMode} size="sm">
             {viewMode === 'markers' ? 'Show Route View' : 'Show Marker View'}
-          </Button>
+        </Button>
           {/* Manual Marker */}
-          <Button
+        <Button 
             variant={isAddingMarker ? 'destructive' : 'outline'}
             onClick={isAddingMarker ? disableMarkerPlacement : enableMarkerPlacement}
-            size="sm"
-          >
+          size="sm" 
+        >
             {isAddingMarker ? 'Cancel Add Marker' : 'Add Manual Marker'}
-          </Button>
+        </Button>
           {/* Coord Dialog */}
           <Button variant="outline" onClick={() => setIsCoordinateDialogOpen(true)} size="sm">
             Add Marker by Coords
-          </Button>
+        </Button>
           {/* Debug Point */}
           {!isDebugPointVisible ? (
              <Button variant="outline" onClick={addDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200">Add Debug Point</Button>
@@ -734,26 +793,26 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
           )}
           {/* Clear Target Button */}
           {targetObjectPosition && (
-            <Button
+        <Button 
               variant="destructive"
-              size="sm"
+          size="sm" 
               onClick={clearTarget}
               title={`Target: ${targetObjectPosition.lat.toFixed(4)}, ${targetObjectPosition.lng.toFixed(4)}`}
               className="ml-auto" // Push to right if space allows
-            >
+        >
               Clear Target Obj
-            </Button>
+        </Button>
           )}
           {/* Distance Circles */}
-          <Button
-            variant={showDistanceCircles ? "default" : "outline"}
-            size="sm"
-            onClick={toggleDistanceCircles}
+        <Button 
+          variant={showDistanceCircles ? "default" : "outline"} 
+          size="sm" 
+          onClick={toggleDistanceCircles}
             disabled={!isDebugPointVisible}
             title={!isDebugPointVisible ? "Add debug point first" : ""}
-          >
+        >
             {showDistanceCircles ? "Hide Dist Rings" : "Show Dist Rings"}
-          </Button>
+        </Button>
           {/* Distance Filter Controls */}
           <span className="text-sm font-medium ml-4 border-l pl-2">Filter dist (±{DISTANCE_FILTER_TOLERANCE}m):</span>
           {[10, 20, 30, 50, 100, 200].map(dist => (
@@ -761,7 +820,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
               onClick={() => handleSetPresetFilter(dist)}
               disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
               ~{dist}m
-            </Button>
+        </Button>
           ))}
           <input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
              placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
@@ -775,7 +834,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             onClick={() => handleSetPresetFilter(null)} >
             Show All
           </Button>
-       </div>
+      </div>
 
        {/* Map Container */}
        <div ref={mapContainerRef} style={{ height: '70vh', width: '100%' }} className="rounded-lg shadow-md relative z-0" />
