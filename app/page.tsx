@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { FileUpload } from "@/components/FileUpload";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
-import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2, Loader2 } from "lucide-react";
 
 interface UploadedFile {
   filename: string;
@@ -18,11 +19,13 @@ export default function Home() {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
   const fetchFiles = async () => {
     try {
       setLoading(true);
       setError(null);
+      setSelectedFiles(new Set());
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/files`);
       const data = await response.json();
       setFiles(data.files);
@@ -50,14 +53,26 @@ export default function Home() {
     return new Date(dateString).toLocaleString();
   };
 
-  const handleFileSelect = (filename: string) => {
-    router.push(`/process?file=${encodeURIComponent(filename)}`);
+  const handleCheckboxChange = (filename: string, checked: boolean) => {
+    setSelectedFiles(prev => {
+      const newSelection = new Set(prev);
+      if (checked) {
+        newSelection.add(filename);
+      } else {
+        newSelection.delete(filename);
+      }
+      return newSelection;
+    });
+  };
+
+  const handleProcessSelected = () => {
+    if (selectedFiles.size === 0) return;
+    const filenames = Array.from(selectedFiles);
+    router.push(`/process?files=${encodeURIComponent(filenames.join(','))}`);
   };
 
   const handleUploadComplete = (filename: string) => {
     fetchFiles();
-    // Automatically navigate to process page with the newly uploaded file
-    router.push(`/process?file=${encodeURIComponent(filename)}`);
   };
 
   return (
@@ -79,7 +94,9 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="text-center py-6 text-stone-500 dark:text-stone-400">Loading files...</div>
+                <div className="text-center py-6 text-stone-500 dark:text-stone-400 flex items-center justify-center">
+                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading files...
+                 </div>
               ) : error ? (
                 <div className="text-red-500 py-6 text-center">Error: {error}</div>
               ) : files.length === 0 ? (
@@ -89,8 +106,14 @@ export default function Home() {
               ) : (
                 <div className="space-y-3">
                   {files.map((file) => (
-                    <Card key={file.filename} className="overflow-hidden">
+                    <Card key={file.filename} className={`overflow-hidden transition-colors ${selectedFiles.has(file.filename) ? 'bg-stone-100 dark:bg-stone-700/50' : ''}`}>
                       <CardContent className="p-4 flex justify-between items-center gap-4">
+                        <Checkbox 
+                          id={`select-${file.filename}`}
+                          checked={selectedFiles.has(file.filename)}
+                          onCheckedChange={(checked) => handleCheckboxChange(file.filename, !!checked)}
+                          className="mr-2"
+                        />
                         <div className="flex items-center gap-3 flex-1 min-w-0">
                           <FileSpreadsheet className="h-6 w-6 text-blue-600 dark:text-blue-400 shrink-0" />
                           <div className="flex-1 min-w-0">
@@ -111,12 +134,6 @@ export default function Home() {
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
-                          <Button
-                            onClick={() => handleFileSelect(file.filename)}
-                            variant="secondary"
-                          >
-                            Select <ArrowRight className="ml-2 h-4 w-4" />
-                          </Button>
                         </div>
                       </CardContent>
                     </Card>
@@ -124,6 +141,17 @@ export default function Home() {
                 </div>
               )}
             </CardContent>
+            {files.length > 0 && !loading && !error && (
+              <CardFooter className="pt-4 border-t">
+                 <Button 
+                    onClick={handleProcessSelected}
+                    disabled={selectedFiles.size === 0}
+                    className="w-full"
+                  >
+                     Process {selectedFiles.size} Selected File(s)
+                  </Button>
+               </CardFooter>
+             )}
           </Card>
         </div>
       </main>

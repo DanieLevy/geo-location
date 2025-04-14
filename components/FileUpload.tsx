@@ -2,6 +2,16 @@ import { useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { UploadCloudIcon, UploadIcon } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface FileUploadProps {
   onUploadComplete?: (filename: string) => void;
@@ -13,6 +23,7 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [uploadStatus, setUploadStatus] = useState<{
     success?: string;
     error?: string;
+    conflictFile?: File | null;
   }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -26,18 +37,23 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
     }
   };
 
-  const handleUpload = async () => {
-    if (!file) {
+  const handleUpload = async (confirmOverwrite: boolean = false) => {
+    const fileToUpload = uploadStatus.conflictFile || file;
+    
+    if (!fileToUpload) {
       setUploadStatus({ error: 'Please select a file first' });
       return;
     }
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', fileToUpload);
+    if (confirmOverwrite) {
+      formData.append('overwrite', 'true');
+    }
 
     try {
       setUploading(true);
-      setUploadStatus({});
+      setUploadStatus(prev => ({ conflictFile: prev.conflictFile }));
 
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/upload`, {
         method: 'POST',
@@ -46,30 +62,45 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
 
       const data = await response.json();
 
+      if (response.status === 409) {
+        console.log('Conflict detected:', data.filename);
+        setUploadStatus({ conflictFile: fileToUpload });
+        setUploading(false);
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(data.error || 'Upload failed');
       }
 
-      // Check if the server renamed the file
-      const wasRenamed = data.file?.filename !== file.name;
-      
-      const successMessage = wasRenamed 
-        ? `File uploaded as "${data.file?.filename}" (renamed to avoid conflicts)`
-        : 'File uploaded successfully with original filename!';
+      const successMessage = data.message || 'File uploaded successfully!';
 
-      setUploadStatus({ success: successMessage });
+      setUploadStatus({ success: successMessage, conflictFile: null });
       setFile(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
       
-      // Call the onUploadComplete callback with the filename if provided
-      onUploadComplete?.(data.file?.filename);
+      onUploadComplete?.(data.filename);
     } catch (error) {
       console.error('Upload error:', error);
-      setUploadStatus({ error: 'Failed to upload file' });
+      setUploadStatus({ error: 'Failed to upload file', conflictFile: null });
     } finally {
-      setUploading(false);
+      if (response?.status !== 409) {
+         setUploading(false);
+      }
+    }
+  };
+
+  const handleOverwriteConfirm = () => {
+    handleUpload(true);
+  };
+
+  const handleOverwriteCancel = () => {
+    setUploadStatus({});
+    setFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -116,13 +147,28 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
         )}
 
         <Button
-          onClick={handleUpload}
-          disabled={!file || uploading}
+          onClick={() => handleUpload()}
+          disabled={!file || uploading || !!uploadStatus.conflictFile}
           className="w-full"
         >
           <UploadIcon className="mr-2 h-4 w-4" />
-          {uploading ? 'Uploading...' : 'Upload File'}
+          {uploading ? 'Uploading...' : (uploadStatus.conflictFile ? 'Awaiting Confirmation' : 'Upload File')}
         </Button>
+
+        <AlertDialog open={!!uploadStatus.conflictFile} onOpenChange={(open) => !open && handleOverwriteCancel()}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>File Already Exists</AlertDialogTitle>
+              <AlertDialogDescription>
+                The file "{uploadStatus.conflictFile?.name}" already exists. Do you want to overwrite it?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={handleOverwriteCancel}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleOverwriteConfirm}>Overwrite</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );

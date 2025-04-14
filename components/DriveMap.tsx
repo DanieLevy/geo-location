@@ -13,8 +13,9 @@ import { JumpExportDialog } from '@/components/JumpExportDialog';
 import { Input } from "@/components/ui/input";
 import {
   MapIcon, PlusIcon, EyeIcon, EyeOffIcon, TargetIcon, CircleIcon,
-  FilterIcon, XIcon, Trash2Icon, Settings2Icon, CheckIcon
+  FilterIcon, XIcon, Trash2Icon, Settings2Icon, CheckIcon, GaugeIcon,
 } from 'lucide-react';
+import { Separator } from "@/components/ui/separator";
 
 // Constants for the debug point
 const DEBUG_POINT_LAT = 31.327642333333333; // Re-add constant
@@ -23,6 +24,8 @@ const DEBUG_POINT_LNG = 35.38836366666666; // Re-add constant
 const MAX_CONSECUTIVE_FRAME_ID_DIFF = 30; // Updated from 10
 const MAX_GROUPING_DISTANCE_METERS = 3.0; // Updated from 1.0
 const TIME_TOLERANCE_MS = 100; // Allow up to 100ms difference for timestamp grouping
+const DEFAULT_DISTANCE_TOLERANCE = 3; // meters
+const DEFAULT_SPEED_TOLERANCE = 5; // km/h
 
 // --- Calculate Distance (Haversine) ---
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -81,13 +84,19 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   const [isCoordinateDialogOpen, setIsCoordinateDialogOpen] = useState(false);
   const [distanceFilter, setDistanceFilter] = useState<number | null>(null); // Currently active filter distance
   const [manualDistanceInput, setManualDistanceInput] = useState<string>(""); // Value in the manual input field
-  const [distanceTolerance, setDistanceTolerance] = useState<number>(3); // State for tolerance (default 3m)
+  const [distanceTolerance, setDistanceTolerance] = useState<number>(DEFAULT_DISTANCE_TOLERANCE); // State for tolerance (default 3m)
   const [showDistanceCircles, setShowDistanceCircles] = useState(false);
   const distanceCirclesRef = useRef<L.Circle[]>([]);
   const [targetObjectPosition, setTargetObjectPosition] = useState<L.LatLng | null>(null);
   const [targetObjectMarkerRef, setTargetObjectMarkerRef] = useState<L.Marker | null>(null);
   const [isJumpExportDialogOpen, setIsJumpExportDialogOpen] = useState(false);
   const [pointsForJumpExport, setPointsForJumpExport] = useState<DrivePoint[] | null>(null);
+  const [sourceFilesForJumpExport, setSourceFilesForJumpExport] = useState<string[]>([]); // State for source files
+
+  // Speed Filter State (NEW)
+  const [speedFilter, setSpeedFilter] = useState<number | null>(null);
+  const [manualSpeedInput, setManualSpeedInput] = useState<string>("");
+  const [speedTolerance, setSpeedTolerance] = useState<number>(DEFAULT_SPEED_TOLERANCE);
 
   // Function to reset style of a marker (example using opacity)
   const resetMarkerStyle = (marker: L.Marker | null) => {
@@ -133,29 +142,45 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       const cluster = e.layer as any;
       const markerCount = cluster.getChildCount();
       
-      // Create DOM element for the popup content
+      // --- Improved Popup Content with Tailwind --- 
       const popupEl = document.createElement('div');
-      popupEl.className = 'p-2';
-      popupEl.innerHTML = `
-          <p class="mb-2 font-semibold">Cluster contains ${markerCount} markers</p>
-          <div class="mb-2">
-            <label for="csv-filename-${cluster._leaflet_id}" class="block text-sm mb-1">CSV Filename:</label>
-            <input 
-              type="text" 
-              id="csv-filename-${cluster._leaflet_id}" 
-              value="map-data" 
-              class="px-2 py-1 border rounded w-full text-sm"
-            />
-          </div>
-      `; // Use unique IDs for inputs
+      popupEl.className = 'p-3 space-y-3 min-w-[200px]'; // Add padding and spacing
 
-      // Create CSV Export Button
+      // Title
+      const titleEl = document.createElement('p');
+      titleEl.className = 'text-sm font-semibold';
+      titleEl.innerText = `Cluster contains ${markerCount} markers`;
+      popupEl.appendChild(titleEl);
+
+      // CSV Filename Input Section
+      const csvInputDiv = document.createElement('div');
+      csvInputDiv.className = 'space-y-1'; 
+      const csvLabel = document.createElement('label');
+      csvLabel.htmlFor = `csv-filename-${cluster._leaflet_id}`;
+      csvLabel.className = 'block text-xs font-medium text-stone-700 dark:text-stone-300';
+      csvLabel.innerText = 'CSV Filename:';
+      const csvInput = document.createElement('input');
+      csvInput.type = 'text';
+      csvInput.id = `csv-filename-${cluster._leaflet_id}`;
+      csvInput.value = 'map-data'; 
+      // Apply input styles similar to shadcn/ui Input
+      csvInput.className = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100';
+      csvInputDiv.appendChild(csvLabel);
+      csvInputDiv.appendChild(csvInput);
+      popupEl.appendChild(csvInputDiv);
+
+      // Button Container
+      const buttonDiv = document.createElement('div');
+      buttonDiv.className = 'flex gap-2 pt-2'; // Add gap between buttons
+
+      // Create CSV Export Button with improved styles
       const csvExportButton = document.createElement('button');
       csvExportButton.id = `export-csv-btn-${cluster._leaflet_id}`;
-      csvExportButton.className = "px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm";
-      csvExportButton.innerText = 'Export to CSV';
+      // Apply button styles similar to shadcn/ui Button (primary-like)
+      csvExportButton.className = "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2 flex-1 bg-blue-600 hover:bg-blue-700 text-white";
+      csvExportButton.innerText = 'Export CSV';
       csvExportButton.onclick = () => {
-          const filenameInput = document.getElementById(`csv-filename-${cluster._leaflet_id}`) as HTMLInputElement;
+          const filenameInput = csvInput; // Use the input element directly
           const data = prepareMarkerDataForExport(cluster as L.MarkerCluster);
           if (data && data.length > 0) {
             let filename = filenameInput.value.trim() || 'map-data';
@@ -164,26 +189,34 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             contextMenu.close();
           }
       };
-      popupEl.appendChild(csvExportButton);
+      buttonDiv.appendChild(csvExportButton);
 
-      // Create Jump Export Button
+      // Create Jump Export Button with improved styles
       const jumpExportButton = document.createElement('button');
       jumpExportButton.id = `export-jump-btn-${cluster._leaflet_id}`;
-      jumpExportButton.className = "ml-2 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"; // Style differently
-      jumpExportButton.innerText = 'Export as .jump';
+      // Apply button styles similar to shadcn/ui Button (secondary-like, adjusted colors)
+      jumpExportButton.className = "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 h-9 px-4 py-2 flex-1 bg-green-600 hover:bg-green-700 text-white";
+      jumpExportButton.innerText = 'Export .jump';
       jumpExportButton.onclick = () => {
-          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster);
+          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster); 
           if (data && data.length > 0) {
               // Extract DrivePoints needed for jump export
               const drivePointsToExport = data.map(d => d!.drivePoint).filter(Boolean) as DrivePoint[];
+              // Extract unique source filenames from the points to export
+              const uniqueSourceFiles = Array.from(new Set(drivePointsToExport.map(p => p.sourceFile)));
+              
               setPointsForJumpExport(drivePointsToExport); // Store points for dialog
+              setSourceFilesForJumpExport(uniqueSourceFiles); // Store source files for dialog
               setIsJumpExportDialogOpen(true); // Open the dialog
               contextMenu.close(); // Close the popup
           } else {
               alert("No valid data points found in this cluster to export.");
           }
       };
-      popupEl.appendChild(jumpExportButton);
+      buttonDiv.appendChild(jumpExportButton);
+
+      // --- >>> Add the container with the buttons to the main popup element <<< ---
+      popupEl.appendChild(buttonDiv);
       
       // Create and open the popup with the buttons
       const contextMenu = L.popup({ closeButton: true, className: 'cluster-context-menu' })
@@ -212,18 +245,30 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
 
     if (points.length === 0) return;
 
-    // Apply distance filter ONLY if filter is set AND debug point exists
-    const filteredPoints = (distanceFilter !== null && debugMarkerRef.current)
-      ? points.filter(point => {
-          const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
-          // --- Apply BAND filtering logic using state variable ---
-          return Math.abs(distance - distanceFilter) <= distanceTolerance;
-        })
-      : points;
+    // --- Apply Filters Sequentially --- 
+    let pointsToDisplay = points; // Start with all points
 
-    // Add markers for the current points
+    // 1. Apply Distance Filter (if active and debug point exists)
+    if (distanceFilter !== null && isDebugPointVisible) {
+      pointsToDisplay = pointsToDisplay.filter(point => {
+        const distance = calculateDistance(point.lat, point.lng, DEBUG_POINT_LAT, DEBUG_POINT_LNG);
+        return Math.abs(distance - distanceFilter) <= distanceTolerance;
+      });
+    }
+
+    // 2. Apply Speed Filter (if active) to the result of the distance filter
+    if (speedFilter !== null) {
+      pointsToDisplay = pointsToDisplay.filter(point => {
+        const speedKmh = point.speed?.kmh;
+        if (speedKmh === null || speedKmh === undefined) return false;
+        return Math.abs(speedKmh - speedFilter) <= speedTolerance;
+      });
+    }
+    // --- End Apply Filters --- 
+
+    // Now use pointsToDisplay for rendering
     if (viewMode === 'markers') {
-      const markers = filteredPoints.map(point => {
+      const markers = pointsToDisplay.map(point => {
         const marker = L.marker([point.lat, point.lng]);
         (marker as any)._drivePointData = point;
         let distanceInfo = '';
@@ -243,6 +288,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             <div><strong>Speed:</strong> ${point.speed?.kmh?.toFixed(1) ?? 'N/A'} km/h (${point.speed?.ms?.toFixed(1) ?? 'N/A'} m/s)</div>
             ${distanceInfo}
             ${point.timestamp ? `<div><strong>Time:</strong> ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
+            <div><strong>Source:</strong> ${point.sourceFile || 'N/A'}</div>
           </div>`;
         
         marker.bindPopup(popupContent, { 
@@ -254,34 +300,44 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       markerClusterRef.current.addLayers(markers);
     } else {
       // Create route visualization with filtered points
-      const routeCoordinates = filteredPoints.map(p => [p.lat, p.lng] as [number, number]);
+      const routeCoordinates = pointsToDisplay.map(p => [p.lat, p.lng] as [number, number]);
       
       if (routeCoordinates.length > 0) {
-        // Create gradient polyline based on speed
-        const segments = routeCoordinates.slice(1).map((coord, i) => {
-          // Use optional chaining and provide a default
-          const speed = filteredPoints[i + 1].speed?.kmh ?? 0;
+        // Create gradient polyline based on speed using pointsToDisplay
+        const segments = pointsToDisplay.slice(1).map((point, i) => {
+          const prevPoint = pointsToDisplay[i]; 
+          const speed = point.speed?.kmh ?? 0;
           const color = getSpeedColor(speed);
           return {
-            coordinates: [routeCoordinates[i], coord],
+            coordinates: [[prevPoint.lat, prevPoint.lng], [point.lat, point.lng]],
             speed,
             color
           };
         });
 
         segments.forEach(segment => {
-          const polyline = L.polyline(segment.coordinates, {
-            color: segment.color,
-            weight: 3,
-            opacity: 0.8
-          }).addTo(mapRef.current!);
+           // Ensure segment coordinates are valid LatLngExpression[]
+          // Create LatLng objects explicitly for type safety
+          const startLatLng = L.latLng(segment.coordinates[0][0], segment.coordinates[0][1]);
+          const endLatLng = L.latLng(segment.coordinates[1][0], segment.coordinates[1][1]);
+          const leafletCoords: L.LatLngExpression[] = [startLatLng, endLatLng]; 
+          
+          // if (leafletCoords.length === 2) { // Check is less critical now
+                const polyline = L.polyline(leafletCoords, {
+                    color: segment.color,
+                    weight: 3,
+                    opacity: 0.8
+                }).addTo(mapRef.current!);
 
-          polyline.bindPopup(`Speed: ${segment.speed.toFixed(2)} km/h`);
-          routeElementsRef.current.push(polyline);
+                polyline.bindPopup(`Speed: ${segment.speed.toFixed(2)} km/h`);
+                routeElementsRef.current.push(polyline);
+          // } else {
+          //      console.warn("Skipping segment with invalid coordinates:", segment.coordinates);
+          // }
         });
 
-        // Add start and end markers
-        const startMarker = L.marker(routeCoordinates[0], {
+        // Add start and end markers based on pointsToDisplay
+        const startMarker = L.marker([pointsToDisplay[0].lat, pointsToDisplay[0].lng], {
           icon: L.divIcon({
             className: 'custom-div-icon',
             html: '<div style="background-color: #22c55e; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white;"></div>',
@@ -291,30 +347,32 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         startMarker.bindPopup('Start Point');
         routeElementsRef.current.push(startMarker);
 
-        const endMarker = L.marker(routeCoordinates[routeCoordinates.length - 1], {
-          icon: L.divIcon({
-            className: 'custom-div-icon',
-            html: '<div style="background-color: #ef4444; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white;"></div>',
-            iconSize: [12, 12],
-          })
-        }).addTo(mapRef.current);
-        endMarker.bindPopup('End Point');
-        routeElementsRef.current.push(endMarker);
+        if (pointsToDisplay.length > 1) {
+            const endMarker = L.marker([pointsToDisplay[pointsToDisplay.length - 1].lat, pointsToDisplay[pointsToDisplay.length - 1].lng], {
+              icon: L.divIcon({
+                className: 'custom-div-icon',
+                html: '<div style="background-color: #ef4444; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white;"></div>',
+                iconSize: [12, 12],
+              })
+            }).addTo(mapRef.current);
+            endMarker.bindPopup('End Point');
+            routeElementsRef.current.push(endMarker);
+        }
       }
     }
 
-    // Fit map bounds
-    if (filteredPoints.length > 0 && mapRef.current) {
+    // Fit map bounds based on pointsToDisplay
+    if (pointsToDisplay.length > 0 && mapRef.current) {
         try {
-            const bounds = L.latLngBounds(filteredPoints.map(p => [p.lat, p.lng]));
+            const bounds = L.latLngBounds(pointsToDisplay.map(p => [p.lat, p.lng]));
             if (bounds.isValid()) {
                 mapRef.current.fitBounds(bounds, { padding: [50, 50] });
             }
         } catch (e) {
-            console.error("Error fitting bounds:", e, filteredPoints);
+            console.error("Error fitting bounds:", e, pointsToDisplay);
         }
     }
-  }, [points, viewMode, distanceFilter, isDebugPointVisible, distanceTolerance]); // Re-run when points, viewMode, filter, debug point visibility, or tolerance changes
+  }, [points, viewMode, distanceFilter, speedFilter, isDebugPointVisible, distanceTolerance, speedTolerance]);
 
   // Calculate distance in meters between two points using Haversine formula
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -387,36 +445,56 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   };
 
   // Function to convert data to CSV and download
-  const exportToCsv = (data: any[], filename: string) => {
-    if (!data.length) return;
+  const exportToCsv = useCallback((data: any[], filename: string) => {
+    if (!data || data.length === 0) return;
 
-    // Get all object keys from the first item to use as headers
+    // Ensure data is an array of objects
+    if (!Array.isArray(data) || typeof data[0] !== 'object' || data[0] === null) {
+        console.error("Invalid data format for CSV export:", data);
+        alert("Cannot export CSV: Invalid data format.");
+        return;
+    }
+
+    // Get headers safely
     const headers = Object.keys(data[0]);
-    
-    // Create CSV header row
+    if (headers.length === 0) {
+         console.error("No headers found for CSV export:", data[0]);
+         alert("Cannot export CSV: No data headers found.");
+        return;
+    }
+
     const csvRows = [headers.join(',')];
-    
-    // Add data rows
+
     for (const row of data) {
+      // Ensure row is an object
+      if (typeof row !== 'object' || row === null) continue;
+
       const values = headers.map(header => {
-        // Handle special cases for nested objects or formatting
-        if (header === 'speed') {
-          return `${row[header].kmh.toFixed(2)}`;
+        // Handle drivePoint object specifically if present
+        if (header === 'drivePoint' && typeof row[header] === 'object' && row[header] !== null) {
+             // Decide what to export from drivePoint - maybe just its ID or sourceFile?
+             // return `"${JSON.stringify(row[header])}"`; // Avoid exporting complex objects directly
+             return row[header]?.sourceFile || ''; // Example: export source file
         }
-        
-        const val = row[header];
-        // Quote strings with commas, wrap in quotes
-        const escaped = typeof val === 'string' ? `"${val.replace(/"/g, '""')}"` : val;
+
+        let val = row[header];
+
+        // Handle nested speed object specifically
+        if (header === 'speed' && typeof val === 'object' && val !== null && 'kmh' in val) {
+          val = val.kmh?.toFixed(2); // Export kmh speed
+        } else if (typeof val === 'object' && val !== null) {
+           // For other objects, maybe stringify or take a specific property
+           val = JSON.stringify(val);
+        }
+
+
+        const escaped = typeof val === 'string' ? `"${val.replace(/"/g, '""')}"` : (val ?? ''); // Handle null/undefined
         return escaped;
       });
-      
       csvRows.push(values.join(','));
     }
-    
-    // Combine all rows into a single string
+
     const csvString = csvRows.join('\n');
-    
-    // Create a download link
     const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -426,10 +504,11 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
+    URL.revokeObjectURL(url);
+  }, []);
 
   // Extract data from markers and prepare for CSV export
-  const prepareMarkerDataForExport = (cluster: L.MarkerCluster) => {
+  const prepareMarkerDataForExport = useCallback((cluster: L.MarkerCluster) => {
     const markers = cluster.getAllChildMarkers() as L.Marker[];
     const extractedData = markers.map(marker => {
       // Get the original DrivePoint data AND KEEP IT for jump export
@@ -463,19 +542,32 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         speed_ms: point.speed?.ms ?? 0,
         speed_kmh: point.speed?.kmh ?? 0,
         distance_from_reference: distance ? distance.toFixed(2) : '',
+        sourceFile: point.sourceFile, // Make sure source file is included
       };
     }).filter(Boolean);
     
     // Sort by timestamp if available
-    if (extractedData.length > 0 && extractedData[0]?.date) {
-      extractedData.sort((a, b) => {
-            if (!a?.drivePoint?.timestamp || !b?.drivePoint?.timestamp) return 0;
-            return new Date(a.drivePoint.timestamp).getTime() - new Date(b.drivePoint.timestamp).getTime();
-      });
+    if (extractedData.length > 0 && extractedData[0]?.time) { // Check time field presence
+        extractedData.sort((a, b) => {
+            // Attempt to reconstruct date objects for sorting
+            try {
+                // Assuming 'date' and 'time' are in standard formats parsable by Date
+                const dateA = a && a.date && a.time ? new Date(`${a.date} ${a.time}`).getTime() : 0;
+                const dateB = b && b.date && b.time ? new Date(`${b.date} ${b.time}`).getTime() : 0;
+                if (isNaN(dateA) || isNaN(dateB)) return 0; // Fallback if dates are invalid
+                 return dateA - dateB;
+            } catch (e) {
+                 console.error("Error parsing date/time for sorting:", e);
+                 return 0; // Fallback on error
+            }
+        });
+    } else if (extractedData.length > 0 && extractedData[0]?.frameId) {
+        // Fallback to sorting by frameId if timestamp is unreliable/missing
+         extractedData.sort((a, b) => (a?.frameId ?? 0) - (b?.frameId ?? 0));
     }
     
     return extractedData;
-  };
+  }, [calculateDistance]); // Add calculateDistance dependency
 
   // Function to clear all route elements
   const clearRouteElements = useCallback(() => {
@@ -612,178 +704,224 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   }, [isAddingMarker, handleMapClick]);
 
   // Simplified functions to toggle the state
-  const enableMarkerPlacement = () => {
+  const enableMarkerPlacement = useCallback(() => {
     setIsAddingMarker(true);
-  };
-  const disableMarkerPlacement = () => {
+  }, []);
+  const disableMarkerPlacement = useCallback(() => {
         setIsAddingMarker(false);
-  };
+  }, []);
   // --- Manual Marker Placement Logic REFACTORED END ---
 
   // --- Distance Filter Handlers START ---
-  const handleSetPresetFilter = (dist: number | null) => {
+  const handleSetPresetFilter = useCallback((dist: number | null) => {
       setDistanceFilter(dist);
-      setManualDistanceInput(""); // Clear manual input when preset is used (or Show All)
-  };
+      setManualDistanceInput("");
+  }, []);
 
-  const handleManualInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleManualInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
       setManualDistanceInput(e.target.value);
-  };
+  }, []);
 
-  const handleApplyManualFilter = () => {
+  const handleApplyManualFilter = useCallback(() => {
       const manualDist = parseFloat(manualDistanceInput);
-      if (!isNaN(manualDist) && manualDist > 0) {
-          setDistanceFilter(manualDist); // Apply the manual distance
+      if (!isNaN(manualDist) && manualDist >= 0) {
+          setDistanceFilter(manualDist);
       } else {
-          // Optional: Show an error or reset if input is invalid
-          console.warn("Invalid manual distance input");
-          // setDistanceFilter(null); // Or keep the previous filter?
+          console.warn("Invalid manual distance input:", manualDistanceInput);
+          setDistanceFilter(null);
+          setManualDistanceInput("");
       }
-  };
+  }, [manualDistanceInput]);
+
   // --- Distance Filter Handlers END ---
 
   // --- Tolerance Handler ---
-  const handleToleranceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDistanceToleranceChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     if (!isNaN(val) && val >= 0) {
       setDistanceTolerance(val);
     } else if (e.target.value === '') {
-      // Handle empty input - maybe set to 0 or a default? Let's use 0 for now.
       setDistanceTolerance(0);
     }
-  };
+  }, []);
 
-  // --- Export to Jump File Logic ---
-  const exportToJump = useCallback((settings: {
+  // --- Speed Filter Handlers START ---
+  const handleSetPresetSpeedFilter = useCallback((speed: number | null) => {
+    setSpeedFilter(speed);
+    setManualSpeedInput("");
+  }, []);
+
+  const handleManualSpeedInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setManualSpeedInput(e.target.value);
+  }, []);
+
+  const handleApplyManualSpeedFilter = useCallback(() => {
+    const manualSpeed = parseFloat(manualSpeedInput);
+    if (!isNaN(manualSpeed) && manualSpeed >= 0) {
+      setSpeedFilter(manualSpeed);
+    } else {
+      console.warn("Invalid manual speed input:", manualSpeedInput);
+       setSpeedFilter(null);
+       setManualSpeedInput("");
+    }
+  }, [manualSpeedInput]);
+
+  const handleSpeedToleranceChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val) && val >= 0) {
+      setSpeedTolerance(val);
+    } else if (e.target.value === '') {
+      setSpeedTolerance(0);
+    }
+  }, []);
+  // --- Speed Filter Handlers END ---
+
+  // --- Export to Jump File Logic (UPDATED for multi-file) ---
+  const exportToJump = useCallback((settingsPerFile: Record<string, { 
     sessionName: string;
     view: string;
     camera: string;
     fps: number;
-  }, 
+  }>, 
   pointsToExport: DrivePoint[] 
   ) => {
-    console.log(`Exporting ${pointsToExport.length} points from cluster to .jump with settings:`, settings);
-
-    if (!points || points.length === 0) {
-        console.warn("Original points array is empty, cannot determine first frame ID.");
-        alert("Cannot export: Original data is missing.");
-        return;
-    }
     if (!pointsToExport || pointsToExport.length === 0) {
         console.warn("No points provided for jump export.");
         alert("No points were selected for the jump export."); 
         return;
     }
 
-    const firstFrameId = Math.min(...points.map(p => p.frameId));
-    console.log("Using first frame ID for clip calculation:", firstFrameId);
+    // Group points by sourceFile
+    const pointsBySourceFile = pointsToExport.reduce((acc, point) => {
+       if (!acc[point.sourceFile]) {
+         acc[point.sourceFile] = [];
+       }
+       acc[point.sourceFile].push(point);
+       return acc;
+    }, {} as Record<string, DrivePoint[]>);
 
-    // --- START: New Grouping and Filtering Logic ---
-    const pointsByClip = new Map<number, DrivePoint[]>();
+    console.log(`Exporting jump data for ${Object.keys(pointsBySourceFile).length} source files.`);
 
-    // 1. Calculate clip and group points
-    pointsToExport.forEach(point => {
-        const frameDifference = point.frameId - firstFrameId;
-        const nonNegativeFrameDiff = Math.max(0, frameDifference);
-        const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
-        const clipNumber = Math.ceil(clipRaw); // Use Math.ceil
+    // Process each source file individually
+    for (const sourceFile in pointsBySourceFile) {
+       if (!settingsPerFile[sourceFile]) {
+          console.warn(`Settings not found for ${sourceFile}, skipping export.`);
+          continue;
+       }
 
-        if (!pointsByClip.has(clipNumber)) {
-            pointsByClip.set(clipNumber, []);
-        }
-        pointsByClip.get(clipNumber)!.push(point);
-    });
+       const settings = settingsPerFile[sourceFile];
+       const filePoints = pointsBySourceFile[sourceFile];
 
-    // 2. Select representative from each clip group based on time separation
-    const finalExportPoints: DrivePoint[] = [];
-    const sortedClipNumbers = Array.from(pointsByClip.keys()).sort((a, b) => a - b);
-    const MIN_TIME_DIFF_MS = 5000; // 5 seconds minimum separation
+       console.log(`Processing ${sourceFile}: ${filePoints.length} points, FPS: ${settings.fps}`);
 
-    sortedClipNumbers.forEach(clipNumber => {
-        const group = pointsByClip.get(clipNumber)!;
-        // Sort points within the group by frameId to process chronologically
-        group.sort((a, b) => a.frameId - b.frameId);
+       if (filePoints.length === 0) continue; // Skip if no points for this file
 
-        let lastKeptPoint: DrivePoint | null = null;
+       // Calculate firstFrameId *based on this file's points*
+       const firstFrameId = Math.min(...filePoints.map(p => p.frameId));
+       console.log(`Using first frame ID for ${sourceFile}:`, firstFrameId);
 
-        group.forEach(currentPoint => {
-            if (!lastKeptPoint) {
-                // Always keep the first point of the group
-                finalExportPoints.push(currentPoint);
-                lastKeptPoint = currentPoint;
-    } else {
-                // Check time difference from the last kept point
-                if (currentPoint.timestamp && lastKeptPoint.timestamp) {
-                    try {
-                        const timeCurrent = new Date(currentPoint.timestamp).getTime();
-                        const timeLastKept = new Date(lastKeptPoint.timestamp).getTime();
-                        if (!isNaN(timeCurrent) && !isNaN(timeLastKept)) {
-                            if (Math.abs(timeCurrent - timeLastKept) > MIN_TIME_DIFF_MS) {
-                                finalExportPoints.push(currentPoint);
-                                lastKeptPoint = currentPoint;
-                            }
-                        }
-                        // Else: if timestamps are invalid, we implicitly skip?
-                    } catch (e) {
-                        console.error("Error parsing timestamp during export filtering:", e);
-                        // Skip this point if timestamps are bad?
-                    }
-                } 
-                // Else: if timestamps are missing, skip?
-            }
-        });
-    });
-    // --- END: New Grouping and Filtering Logic ---
+       // --- START: Filtering Logic (applied per file) ---
+       const pointsByClip = new Map<number, DrivePoint[]>();
 
-    console.log(`Selected ${finalExportPoints.length} points for export after time filtering.`);
+       // 1. Calculate clip and group points for this file
+       filePoints.forEach(point => {
+           const frameDifference = point.frameId - firstFrameId;
+           const nonNegativeFrameDiff = Math.max(0, frameDifference);
+           const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
+           // Ensure clipNumber is at least 1
+           const clipNumber = Math.max(1, Math.ceil(clipRaw)); 
 
-    if (finalExportPoints.length === 0) { // Check the final list
-        alert("No representative points found after grouping and time filtering.");
-        return;
+           if (!pointsByClip.has(clipNumber)) {
+               pointsByClip.set(clipNumber, []);
+           }
+           pointsByClip.get(clipNumber)!.push(point);
+       });
+
+       // 2. Select representative from each clip group based on time separation
+       const finalExportPoints: DrivePoint[] = [];
+       const sortedClipNumbers = Array.from(pointsByClip.keys()).sort((a, b) => a - b);
+       const MIN_TIME_DIFF_MS = 5000; // 5 seconds minimum separation
+
+       sortedClipNumbers.forEach(clipNumber => {
+           const group = pointsByClip.get(clipNumber)!;
+           group.sort((a, b) => a.frameId - b.frameId);
+           let lastKeptPoint: DrivePoint | null = null;
+
+           group.forEach(currentPoint => {
+               if (!lastKeptPoint) {
+                   finalExportPoints.push(currentPoint);
+                   lastKeptPoint = currentPoint;
+               } else {
+                   if (currentPoint.timestamp && lastKeptPoint.timestamp) {
+                       try {
+                           const timeCurrent = new Date(currentPoint.timestamp).getTime();
+                           const timeLastKept = new Date(lastKeptPoint.timestamp).getTime();
+                           if (!isNaN(timeCurrent) && !isNaN(timeLastKept)) {
+                               if (Math.abs(timeCurrent - timeLastKept) > MIN_TIME_DIFF_MS) {
+                                   finalExportPoints.push(currentPoint);
+                                   lastKeptPoint = currentPoint;
+                               }
+                           }
+                       } catch (e) {
+                           console.error("Error parsing timestamp during export filtering:", e);
+                       }
+                   } 
+               }
+           });
+       });
+       // --- END: Filtering Logic ---
+
+       console.log(`Selected ${finalExportPoints.length} points for export from ${sourceFile} after time filtering.`);
+
+       if (finalExportPoints.length === 0) {
+           console.warn(`No representative points found for ${sourceFile} after filtering.`);
+           continue; // Skip to the next file
+       }
+
+       // 3. Generate jump file lines using this file's points and settings
+       const jumpFileLines = finalExportPoints.map(point => {
+           const frameDifference = point.frameId - firstFrameId;
+           const nonNegativeFrameDiff = Math.max(0, frameDifference);
+           const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
+           // Ensure clipNumber is at least 1
+           const clipNumber = Math.max(1, Math.ceil(clipRaw)); 
+           const clipFormatted = String(clipNumber).padStart(4, '0');
+
+           // Distance Label Logic (remains the same, uses global target/debug point)
+           let distanceLabel = 'NoTarget';
+           let refLat: number | null = null;
+           let refLng: number | null = null;
+           if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
+           else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
+           if (refLat !== null && refLng !== null) {
+               const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
+               distanceLabel = `${Math.round(distance)}m`;
+               const speedKmh = Math.round(point.speed?.kmh ?? 0);
+               distanceLabel += `_${speedKmh}kmh`;
+           }
+
+           // Use the session name, view, camera from this file's settings
+           return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
+       });
+
+       const jumpFileContent = jumpFileLines.join('\n') + '\n#format: trackfile camera frameIDStartFrame tag';
+
+       // Create Blob and Trigger Download for THIS file
+       const blob = new Blob([jumpFileContent], { type: 'text/plain;charset=utf-8;' });
+       const url = URL.createObjectURL(blob);
+       const link = document.createElement('a');
+       link.setAttribute('href', url);
+       const safeFilename = settings.sessionName.replace(/[^a-z0-9_.-]/gi, '');
+       link.setAttribute('download', `${safeFilename || sourceFile.replace(/\.csv$/i, '') || 'export'}.jump`);
+       document.body.appendChild(link);
+       link.click();
+       document.body.removeChild(link);
+       URL.revokeObjectURL(url);
+       console.log(`Jump file export triggered for ${sourceFile} as ${link.getAttribute('download')}.`);
     }
+    // End of loop through source files
 
-    // 3. Generate jump file lines using finalExportPoints
-    const jumpFileLines = finalExportPoints.map(point => {
-        // Recalculate clip formatted string for the representative point
-        const frameDifference = point.frameId - firstFrameId;
-        const nonNegativeFrameDiff = Math.max(0, frameDifference);
-        const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
-        const clipNumber = Math.ceil(clipRaw); 
-        const clipFormatted = String(clipNumber).padStart(4, '0');
-
-        // Distance Label Logic
-        let distanceLabel = 'NoTarget';
-        let refLat: number | null = null;
-        let refLng: number | null = null;
-        if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
-        else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
-        if (refLat !== null && refLng !== null) {
-            const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
-            distanceLabel = `${Math.round(distance)}m`;
-            // Use optional chaining for speed
-            const speedKmh = Math.round(point.speed?.kmh ?? 0);
-            distanceLabel += `_${speedKmh}kmh`;
-        }
-
-        return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
-    });
-
-    const jumpFileContent = jumpFileLines.join('\n') + '\n#format: trackfile camera frameIDStartFrame tag';
-
-    // Create Blob and Trigger Download
-    const blob = new Blob([jumpFileContent], { type: 'text/plain;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    const safeFilename = settings.sessionName.replace(/[^a-z0-9_.-]/gi, '');
-    link.setAttribute('download', `${safeFilename || 'export'}.jump`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    console.log("Jump file export triggered.");
-
-  }, [points, isDebugPointVisible, targetObjectPosition]);
+  }, [isDebugPointVisible, targetObjectPosition, calculateDistance]); // Dependencies might need review
 
   // --- UI Rendering ---
   return (
@@ -842,54 +980,91 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             )}
           </div>
 
-          {/* Group 3: Distance Filtering */}
-          <div className="flex flex-wrap items-center gap-2 border-l pl-4">
-             <span className="text-sm font-medium flex items-center">
-               <FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Filter dist (± 
-             </span>
-            <Input
-              type="number"
-              value={distanceTolerance}
-              onChange={handleToleranceChange}
-              min="0"
-              step="0.1"
-              className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-              title="Set distance filter tolerance (meters)"
-              disabled={!isDebugPointVisible}
-            />
-            <span className="text-sm font-medium mr-2"> m):</span>
-            
-            {/* Preset Filters */}
-            <div className="flex items-center gap-1">
-              {[10, 20, 30, 50, 100, 200].map(dist => (
-                <Button key={dist} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
-                  onClick={() => handleSetPresetFilter(dist)}
-                  disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
-                  ~{dist}m
-                </Button>
-              ))}
-            </div>
+          {/* Separator */}
+          <Separator orientation="vertical" className="h-auto mx-2 hidden md:block" />
 
-            {/* Manual Filter Input */}
-            <div className="flex items-center gap-1">
-              <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
-                placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
-                className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                title={!isDebugPointVisible ? "Add debug point first" : "Enter distance to filter around"} />
-              <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
-                disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : "Apply manual distance filter"} >
-                <CheckIcon className="h-4 w-4" /> Apply
-              </Button>
-            </div>
+          {/* Group 3: Filtering (Combined Distance & Speed) */}
+          <div className="flex flex-col gap-3 flex-grow min-w-[300px]">
+               {/* Distance Filtering Row */}
+               <div className="flex flex-wrap items-center gap-2">
+                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by distance from Debug Point">
+                     <FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Dist (±
+                   </span>
+                   <Input
+                     type="number"
+                     value={distanceTolerance}
+                     onChange={handleDistanceToleranceChange}
+                     min="0" step="0.1"
+                     className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+                     title="Set distance filter tolerance (meters)"
+                     disabled={!isDebugPointVisible}
+                   />
+                   <span className="text-sm font-medium mr-2 shrink-0">m):</span>
 
-            {/* Show All Button */}
-            <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
-              onClick={() => handleSetPresetFilter(null)} 
-              disabled={!isDebugPointVisible} 
-              title={!isDebugPointVisible ? "Add debug point first" : "Show all points (clear distance filter)"}>
-              <XIcon className="mr-2 h-4 w-4" /> Show All
-            </Button>
-          </div>
+                   <div className="flex items-center gap-1 flex-wrap">
+                      {[10, 20, 30, 50, 100, 200].map(dist => (
+                        <Button key={`dist-${dist}`} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
+                          onClick={() => handleSetPresetFilter(dist)}
+                          disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
+                          ~{dist}m
+                        </Button>
+                      ))}
+                       <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
+                        placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
+                        className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+                        title={!isDebugPointVisible ? "Add debug point first" : "Enter distance to filter around"} />
+                      <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
+                        disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : "Apply manual distance filter"} >
+                        <CheckIcon className="h-4 w-4" />
+                      </Button>
+                       <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
+                          onClick={() => handleSetPresetFilter(null)}
+                          disabled={!isDebugPointVisible}
+                          title={!isDebugPointVisible ? "Add debug point first" : "Show all points (clear distance filter)"}>
+                          <XIcon className="mr-1 h-4 w-4" /> All Dist
+                        </Button>
+                   </div>
+               </div>
+
+                {/* Speed Filtering Row (NEW) */}
+               <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by speed (km/h)">
+                     <GaugeIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Speed (±
+                   </span>
+                   <Input
+                     type="number"
+                     value={speedTolerance}
+                     onChange={handleSpeedToleranceChange}
+                     min="0" step="1" // Sensible step for km/h
+                     className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+                     title="Set speed filter tolerance (km/h)"
+                   />
+                   <span className="text-sm font-medium mr-2 shrink-0">km/h):</span>
+
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {[20, 50, 80, 100].map(speed => (
+                        <Button key={`speed-${speed}`} variant={speedFilter === speed ? 'default' : 'outline'} size="sm"
+                          onClick={() => handleSetPresetSpeedFilter(speed)}
+                          title={`Filter ~${speed} km/h`} >
+                          ~{speed}
+                        </Button>
+                      ))}
+                       <Input type="number" value={manualSpeedInput} onChange={handleManualSpeedInputChange}
+                        placeholder="Manual (km/h)" min="0"
+                        className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+                        title={"Enter speed to filter around"} />
+                      <Button variant="secondary" size="sm" onClick={handleApplyManualSpeedFilter}
+                        disabled={!manualSpeedInput} title={"Apply manual speed filter"} >
+                        <CheckIcon className="h-4 w-4" />
+                      </Button>
+                       <Button variant={speedFilter === null ? 'default' : 'outline'} size="sm"
+                          onClick={() => handleSetPresetSpeedFilter(null)}
+                          title={"Show all points (clear speed filter)"}>
+                          <XIcon className="mr-1 h-4 w-4" /> All Speed
+                        </Button>
+                   </div>
+               </div>
+           </div>
 
       </div>
 
@@ -906,16 +1081,19 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
        {/* Jump Export Dialog */}
        <JumpExportDialog
          isOpen={isJumpExportDialogOpen}
+         sourceFiles={sourceFilesForJumpExport} // Pass the source files
          onClose={() => {
              setIsJumpExportDialogOpen(false);
-             setPointsForJumpExport(null); // Clear stored points when closing
+             setPointsForJumpExport(null); // Clear stored points
+             setSourceFilesForJumpExport([]); // Clear stored source files
          }}
-         onSubmit={(settings) => {
+         onSubmit={(settingsPerFile) => {
            if (pointsForJumpExport) { // Check if points are stored
-               exportToJump(settings, pointsForJumpExport); // Pass stored points
+               exportToJump(settingsPerFile, pointsForJumpExport); // Pass settingsPerFile and points
            }
            setIsJumpExportDialogOpen(false); // Close dialog on submit
            setPointsForJumpExport(null); // Clear stored points
+           setSourceFilesForJumpExport([]); // Clear stored source files
          }}
        />
 

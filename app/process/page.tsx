@@ -5,6 +5,11 @@ import { useEffect, useState } from 'react';
 import { Button } from "@/components/ui/button";
 import dynamic from 'next/dynamic';
 import { DrivePoint } from '@/lib/types';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Loader2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 const DriveMap = dynamic(
   () => import('@/components/DriveMap'),
@@ -16,166 +21,165 @@ const DriveMap = dynamic(
   }
 );
 
-interface DataMetadata {
-  totalPointsInFile: number;
-  invalidPointsDetected: number;
-  validationErrors?: Array<{ line: number; errors: string[]; rawData: any }>;
+interface BackendResponseMetadata {
+  totalValidPoints: number;
+  totalInvalidPoints: number;
+  processedFilenames: string[];
+  // validationErrors?: any[]; // Keep validation errors structure flexible
 }
 
 export default function ProcessPage() {
   const searchParams = useSearchParams();
-  const filename = searchParams.get('file');
-  
+  // Get multiple filenames from 'files' query param
+  const filesQuery = searchParams.get('files'); 
+  const filenames = filesQuery ? filesQuery.split(',') : [];
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [points, setPoints] = useState<DrivePoint[]>([]);
-  const [metadata, setMetadata] = useState<{ totalPointsInFile: number; invalidPointsDetected: number; validationErrors?: any[] } | null>(null);
+  // Update metadata state type
+  const [metadata, setMetadata] = useState<BackendResponseMetadata | null>(null);
   const [showDebug, setShowDebug] = useState(false);
 
   const fetchData = async () => {
-    if (!filename) {
-      setError('No file selected');
+    // Check if filenames array is empty
+    if (filenames.length === 0) {
+      setError('No files specified for processing.');
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      console.log('Debug - Fetching data for:', filename);
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/csv-data/${filename}`
-      );
-      
+      console.log('Debug - Fetching data for:', filenames.join(','));
+      // Use the new endpoint and pass filenames in query
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/csv-data?files=${encodeURIComponent(filenames.join(','))}`;
+      const response = await fetch(apiUrl);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Failed to fetch file data' }));
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-      
+
       const data = await response.json();
-      console.log('Debug - Received data:', data);
-      
+      console.log('Debug - Received aggregated data:', data);
+
       setPoints(data.points || []);
-      
+      // Set the new metadata structure
       setMetadata({
-        totalPointsInFile: data.totalPointsInFile || 0,
-        invalidPointsDetected: data.invalidPointsDetected || 0,
-        validationErrors: data.validationErrors 
+        totalValidPoints: data.totalValidPoints || 0,
+        totalInvalidPoints: data.totalInvalidPoints || 0,
+        processedFilenames: data.processedFilenames || [],
+        // validationErrors: data.validationErrors 
       });
+
       setLoading(false);
     } catch (err: any) {
-      console.error('Debug - Error fetching data:', err);
-      setError(err.message || 'Failed to load or parse the file');
+      console.error('Debug - Error fetching aggregated data:', err);
+      setError(err.message || 'Failed to load or parse file data');
       setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchData();
-  }, [filename]);
+    // Depend on filesQuery to refetch if query changes
+  }, [filesQuery]); 
 
   const handleBackToHome = () => {
     window.location.href = '/';
   };
 
   const renderDebugInfo = () => {
-    if (!metadata?.validationErrors || metadata.validationErrors.length === 0) {
-        return (
-            <div className="mt-4 p-4 bg-gray-100 dark:bg-stone-700 rounded-lg">
-                <h3 className="text-lg font-semibold mb-2">Debug Information</h3>
-                <p>No validation errors detected, or debug info not available.</p>
-            </div>
-        );
-    }
-
     return (
-      <div className="mt-4 p-4 bg-gray-100 dark:bg-stone-700 rounded-lg overflow-x-auto">
-        <h3 className="text-lg font-semibold mb-2">Validation Errors</h3>
-        <p className="text-sm mb-2">Showing {metadata.validationErrors.length} lines that failed validation:</p>
-        <div className="space-y-2 font-mono text-sm">
-          {metadata.validationErrors.map((error, index) => (
-            <div key={index} className="p-2 bg-red-100 dark:bg-red-900/20 rounded">
-              <div className="font-semibold">Original Line ~{error.line}:</div>
-              <pre className="text-xs mt-1 p-1 bg-gray-200 dark:bg-stone-600 rounded overflow-x-auto">
-                {JSON.stringify(error.rawData)}
-              </pre>
-              <ul className="list-disc list-inside mt-1">
-                {error.errors.map((err: string, errIndex: number) => (
-                  <li key={errIndex} className="text-red-600 dark:text-red-400">
-                    {err}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </div>
+      <Card className="mt-4">
+         <CardHeader><CardTitle>Processing Summary & Debug</CardTitle></CardHeader>
+        <CardContent>
+          {metadata ? (
+            <pre className="text-xs font-mono bg-stone-100 dark:bg-stone-900 p-4 rounded overflow-x-auto">
+              {JSON.stringify(metadata, null, 2)}
+            </pre>
+          ) : (
+            <p>No metadata available.</p>
+          )}
+          <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">* Debug info display for validation errors needs refinement for multi-file view.</p>
+         </CardContent>
+      </Card>
     );
   };
 
-  if (error) {
+  if (loading) {
     return (
-      <div className="min-h-screen p-8 bg-stone-50 dark:bg-stone-900">
-        <main className="max-w-4xl mx-auto">
-          <div className="bg-white dark:bg-stone-800 p-6 rounded-lg shadow-md">
-            <h1 className="text-2xl font-bold text-red-600 mb-4">Error</h1>
-            <p className="text-stone-600 dark:text-stone-300 mb-4">{error}</p>
-            <Button onClick={handleBackToHome}>Back to Home</Button>
-          </div>
-        </main>
-      </div>
+      <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+           <Loader2 className="h-12 w-12 text-stone-500 dark:text-stone-400 animate-spin" />
+           <p className="text-lg text-stone-600 dark:text-stone-300">Loading map data...</p>
+        </div>
+       </div>
     );
   }
 
-  if (loading) {
+  if (error) {
     return (
-      <div className="min-h-screen p-8 bg-stone-50 dark:bg-stone-900">
+      <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950">
         <main className="max-w-4xl mx-auto">
-          <div className="bg-white dark:bg-stone-800 p-6 rounded-lg shadow-md">
-            <h2 className="text-lg font-semibold mb-4">Loading...</h2>
-          </div>
+          <Card className="border-red-500 dark:border-red-700">
+            <CardHeader>
+               <CardTitle className="text-red-600 dark:text-red-500">Error Loading Data</CardTitle>
+            </CardHeader>
+            <CardContent>
+               <p className="text-stone-700 dark:text-stone-300 mb-6">{error}</p>
+               <Button onClick={handleBackToHome} variant="destructive">
+                <ArrowLeft className="mr-2 h-4 w-4" /> Back to Home
+               </Button>
+            </CardContent>
+          </Card>
         </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen p-8 bg-stone-50 dark:bg-stone-900">
-      <main className="max-w-6xl mx-auto">
-        <div className="bg-white dark:bg-stone-800 p-6 rounded-lg shadow-md">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-2xl font-bold">Processing: {filename}</h1>
-              {metadata && (
-                <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
-                  Total valid points found: {points.length.toLocaleString()} / {metadata.totalPointsInFile.toLocaleString()} (Invalid: {metadata.invalidPointsDetected})
-                </p>
-              )}
+    <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950">
+      <main className="max-w-full mx-auto px-4">
+        <Card className="mb-6">
+          <CardContent className="p-4">
+             <div className="flex flex-wrap justify-between items-start gap-4">
+              <div>
+                 <h1 className="text-2xl font-bold mb-1">Processing Files</h1>
+                <div className="flex flex-wrap gap-1">
+                   {filenames.map(name => (
+                     <Badge key={name} variant="secondary" className="whitespace-nowrap">{name}</Badge>
+                   ))}
+                 </div>
+                {metadata && (
+                  <p className="text-sm text-stone-500 dark:text-stone-400 mt-2">
+                    Total valid points: <span className="font-semibold">{metadata.totalValidPoints.toLocaleString()}</span> | Total Invalid: <span className="font-semibold">{metadata.totalInvalidPoints.toLocaleString()}</span>
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 shrink-0">
+                 <Button
+                  variant="secondary"
+                  onClick={() => setShowDebug(!showDebug)}
+                >
+                   {showDebug ? 'Hide Summary' : 'Show Summary'}
+                </Button>
+                <Button variant="outline" onClick={handleBackToHome}>
+                  Back to Home
+                </Button>
+              </div>
             </div>
-            <div className="flex gap-4">
-              <Button
-                variant="secondary"
-                onClick={() => setShowDebug(!showDebug)}
-              >
-                {showDebug ? 'Hide Debug' : 'Show Debug'}
-              </Button>
-              <Button variant="outline" onClick={handleBackToHome}>
-                Back to Home
-              </Button>
-            </div>
-          </div>
-          
-          {loading && <div className="text-center py-8">Loading all data...</div>}
-          {error && <div className="text-red-500 text-center py-8">Error: {error}</div>}
-          
-          {!loading && !error && (
-            <div className="space-y-4">
-              <DriveMap 
-                points={points} 
-              />
-              {showDebug && renderDebugInfo()}
-            </div>
-          )}
-        </div>
+           </CardContent>
+        </Card>
+
+        {showDebug && renderDebugInfo()}
+
+        {!error && (
+          <div className="space-y-4">
+             <DriveMap points={points} />
+           </div>
+        )}
       </main>
     </div>
   );

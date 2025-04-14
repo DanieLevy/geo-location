@@ -6,4 +6,5 @@ export interface DrivePoint {
   // Keep speed flexible for now, might need refinement
   speed?: { ms: number; kmh: number }; 
   timestamp?: string;
+  sourceFile: string;
 } 
