@@ -10,6 +10,11 @@ import { Button } from "@/components/ui/button";
 import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
 import { DrivePoint } from '@/lib/types';
 import { JumpExportDialog } from '@/components/JumpExportDialog';
+import { Input } from "@/components/ui/input";
+import {
+  MapIcon, PlusIcon, EyeIcon, EyeOffIcon, TargetIcon, CircleIcon,
+  FilterIcon, XIcon, Trash2Icon, Settings2Icon, CheckIcon
+} from 'lucide-react';
 
 // Constants for the debug point
 const DEBUG_POINT_LAT = 31.327642333333333; // Re-add constant
@@ -783,88 +788,109 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   // --- UI Rendering ---
   return (
     <div className="space-y-4">
-       {/* Controls moved above the map */}
-       <div className="flex flex-wrap items-center gap-2 p-2 bg-stone-100 dark:bg-stone-800 rounded shadow">
-          {/* View Mode */}
-          <Button onClick={toggleViewMode} size="sm">
-            {viewMode === 'markers' ? 'Show Route View' : 'Show Marker View'}
-        </Button>
-          {/* Manual Marker */}
-        <Button 
-            variant={isAddingMarker ? 'destructive' : 'outline'}
-            onClick={isAddingMarker ? disableMarkerPlacement : enableMarkerPlacement}
-          size="sm" 
-        >
-            {isAddingMarker ? 'Cancel Add Marker' : 'Add Manual Marker'}
-        </Button>
-          {/* Coord Dialog */}
-          <Button variant="outline" onClick={() => setIsCoordinateDialogOpen(true)} size="sm">
-            Add Marker by Coords
-        </Button>
-          {/* Debug Point */}
-          {!isDebugPointVisible ? (
-             <Button variant="outline" onClick={addDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200">Add Debug Point</Button>
-          ) : (
-             <Button variant="outline" onClick={removeDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200">Remove Debug Point</Button>
-          )}
-          {/* Clear Target Button */}
-          {targetObjectPosition && (
-        <Button 
-              variant="destructive"
-          size="sm" 
-              onClick={clearTarget}
-              title={`Target: ${targetObjectPosition.lat.toFixed(4)}, ${targetObjectPosition.lng.toFixed(4)}`}
-              className="ml-auto" // Push to right if space allows
-        >
-              Clear Target Obj
-        </Button>
-          )}
-          {/* Distance Circles */}
-        <Button 
-          variant={showDistanceCircles ? "default" : "outline"} 
-          size="sm" 
-          onClick={toggleDistanceCircles}
-            disabled={!isDebugPointVisible}
-            title={!isDebugPointVisible ? "Add debug point first" : ""}
-        >
-            {showDistanceCircles ? "Hide Dist Rings" : "Show Dist Rings"}
-        </Button>
-          {/* Distance Filter Controls */}
-          <span className="text-sm font-medium ml-4 border-l pl-2">
-             Filter dist (±
-          </span>
-           <input
-             type="number"
-             value={distanceTolerance}
-             onChange={handleToleranceChange}
-             min="0"
-             step="0.1" // Allow decimal tolerance
-             className="px-1 py-0 border rounded w-16 text-sm h-7 mx-1 dark:bg-stone-700 dark:border-stone-600 disabled:opacity-50"
-             title="Set distance filter tolerance (meters)"
-             disabled={!isDebugPointVisible} // Also disable if debug point isn't visible
-           />
-          <span className="text-sm font-medium">
-            m):
-          </span>
-          {[10, 20, 30, 50, 100, 200].map(dist => (
-            <Button key={dist} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
-              onClick={() => handleSetPresetFilter(dist)}
-              disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
-              ~{dist}m
-        </Button>
-          ))}
-          <input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
-             placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
-             className="px-2 py-1 border rounded w-24 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-             title={!isDebugPointVisible ? "Add debug point first" : ""} />
-          <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
-             disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : ""} >
-             Filter
-          </Button>
-          <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
-            onClick={() => handleSetPresetFilter(null)} >
-            Show All
-          </Button>
+       {/* --- Controls Section --- */}
+       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg shadow">
+
+          {/* Group 1: View & Add */}
+          <div className="flex items-center gap-2">
+            <Button onClick={toggleViewMode} size="sm" variant="outline">
+              <MapIcon className="mr-2 h-4 w-4" />
+              {viewMode === 'markers' ? 'Route View' : 'Marker View'}
+            </Button>
+            <Button 
+                variant={isAddingMarker ? 'destructive' : 'outline'}
+                onClick={isAddingMarker ? disableMarkerPlacement : enableMarkerPlacement}
+              size="sm" 
+            >
+              {isAddingMarker ? <XIcon className="mr-2 h-4 w-4" /> : <PlusIcon className="mr-2 h-4 w-4" />}
+              {isAddingMarker ? 'Cancel Add' : 'Add Marker'}
+            </Button>
+            <Button variant="outline" onClick={() => setIsCoordinateDialogOpen(true)} size="sm">
+              <PlusIcon className="mr-2 h-4 w-4" /> Coords
+            </Button>
+          </div>
+
+          {/* Group 2: Debug & Target */}
+          <div className="flex items-center gap-2 border-l pl-4">
+            {!isDebugPointVisible ? (
+              <Button variant="outline" onClick={addDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
+                <EyeIcon className="mr-2 h-4 w-4" /> Add Debug
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={removeDebugPoint} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
+                 <EyeOffIcon className="mr-2 h-4 w-4" /> Remove Debug
+              </Button>
+            )}
+            <Button 
+              variant={showDistanceCircles ? "secondary" : "outline"} 
+              size="sm" 
+              onClick={toggleDistanceCircles}
+              disabled={!isDebugPointVisible}
+              title={!isDebugPointVisible ? "Add debug point first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}
+            >
+              <CircleIcon className="mr-2 h-4 w-4" /> Rings
+            </Button>
+             {targetObjectPosition && (
+                <Button 
+                  variant="destructive"
+                  size="sm" 
+                  onClick={clearTarget}
+                  title={`Clear Target: ${targetObjectPosition.lat.toFixed(4)}, ${targetObjectPosition.lng.toFixed(4)}`}
+                >
+                  <Trash2Icon className="mr-2 h-4 w-4" /> Clear Target
+                </Button>
+            )}
+          </div>
+
+          {/* Group 3: Distance Filtering */}
+          <div className="flex flex-wrap items-center gap-2 border-l pl-4">
+             <span className="text-sm font-medium flex items-center">
+               <FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Filter dist (± 
+             </span>
+            <Input
+              type="number"
+              value={distanceTolerance}
+              onChange={handleToleranceChange}
+              min="0"
+              step="0.1"
+              className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+              title="Set distance filter tolerance (meters)"
+              disabled={!isDebugPointVisible}
+            />
+            <span className="text-sm font-medium mr-2"> m):</span>
+            
+            {/* Preset Filters */}
+            <div className="flex items-center gap-1">
+              {[10, 20, 30, 50, 100, 200].map(dist => (
+                <Button key={dist} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
+                  onClick={() => handleSetPresetFilter(dist)}
+                  disabled={!isDebugPointVisible} title={!isDebugPointVisible ? "Add debug point first" : `Filter ~${dist}m`} >
+                  ~{dist}m
+                </Button>
+              ))}
+            </div>
+
+            {/* Manual Filter Input */}
+            <div className="flex items-center gap-1">
+              <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
+                placeholder="Manual (m)" disabled={!isDebugPointVisible} min="0"
+                className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
+                title={!isDebugPointVisible ? "Add debug point first" : "Enter distance to filter around"} />
+              <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
+                disabled={!isDebugPointVisible || !manualDistanceInput} title={!isDebugPointVisible ? "Add debug point first" : "Apply manual distance filter"} >
+                <CheckIcon className="h-4 w-4" /> Apply
+              </Button>
+            </div>
+
+            {/* Show All Button */}
+            <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
+              onClick={() => handleSetPresetFilter(null)} 
+              disabled={!isDebugPointVisible} 
+              title={!isDebugPointVisible ? "Add debug point first" : "Show all points (clear distance filter)"}>
+              <XIcon className="mr-2 h-4 w-4" /> Show All
+            </Button>
+          </div>
+
       </div>
 
        {/* Map Container */}
