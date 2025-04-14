@@ -641,43 +641,46 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   ) => {
     console.log(`Exporting ${pointsToExport.length} points to .jump with settings:`, settings);
 
+    if (!points || points.length === 0) { // Check the original points array for first frame ID
+        console.warn("Original points array is empty, cannot determine first frame ID.");
+        alert("Cannot export: Original data is missing.");
+        return;
+    }
     if (!pointsToExport || pointsToExport.length === 0) {
         console.warn("No points provided for jump export.");
         alert("No points were selected for the jump export."); 
         return;
     }
 
-    const jumpFileContent = pointsToExport.map(point => {
-        // Calculate Clip number
-        const clipRaw = point.frameId / 60 / settings.fps;
-        const clipNumber = Math.floor(clipRaw);
-        const clipFormatted = String(clipNumber).padStart(4, '0');
+    // Find the very first frame ID from the original, unfiltered data
+    const firstFrameId = Math.min(...points.map(p => p.frameId));
+    console.log("Using first frame ID for clip calculation:", firstFrameId);
 
-        // --- START: Modified Distance Label Logic ---
+    const jumpFileLines = pointsToExport.map(point => {
+        // --- START: Updated Clip Calculation using Math.ceil ---
+        const frameDifference = point.frameId - firstFrameId;
+        const nonNegativeFrameDiff = Math.max(0, frameDifference); 
+        
+        const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
+        // Use Math.ceil as requested
+        const clipNumber = Math.ceil(clipRaw); 
+        const clipFormatted = String(clipNumber).padStart(4, '0');
+        // --- END: Updated Clip Calculation ---
+
+        // --- Distance Label Logic (remains the same) ---
         let distanceLabel = 'NoTarget'; 
         let refLat: number | null = null;
         let refLng: number | null = null;
-
-        if (targetObjectPosition) {
-            // Priority 1: Use explicitly set target object
-            refLat = targetObjectPosition.lat;
-            refLng = targetObjectPosition.lng;
-        } else if (isDebugPointVisible) {
-            // Priority 2: Use Debug Point if visible and no explicit target
-            refLat = DEBUG_POINT_LAT;
-            refLng = DEBUG_POINT_LNG;
-        }
-
-        // Calculate distance if a reference point was found
-        if (refLat !== null && refLng !== null) {
-            const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
-            distanceLabel = `${Math.round(distance)}m`; // Round to nearest meter
-        }
-        // --- END: Modified Distance Label Logic ---
-
+        if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
+        else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
+        if (refLat !== null && refLng !== null) { const distance = calculateDistance(point.lat, point.lng, refLat, refLng); distanceLabel = `${Math.round(distance)}m`; }
+        
         // Construct the line
         return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
-    }).join('\n');
+    });
+
+    // --- Add Footer Line --- 
+    const jumpFileContent = jumpFileLines.join('\n') + '\n#format: trackfile camera frameIDStartFrame tag';
 
     // Create Blob and Trigger Download
     const blob = new Blob([jumpFileContent], { type: 'text/plain;charset=utf-8;' });
@@ -692,7 +695,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     URL.revokeObjectURL(url);
     console.log("Jump file export triggered.");
 
-  }, [isDebugPointVisible, targetObjectPosition]); // Dependencies updated
+  }, [points, isDebugPointVisible, targetObjectPosition]); // Added original 'points' to dependencies
 
   // --- UI Rendering ---
   return (
