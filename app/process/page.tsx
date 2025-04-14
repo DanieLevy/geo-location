@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info } from "lucide-react";
+import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info, FileText, Clock, Milestone, Gauge, CheckCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { getAiDriveSummary, getAiDataChatCompletion, getAiModels, AiModelInfo } from "@/lib/aiService";
@@ -33,11 +33,33 @@ interface BackendResponseMetadata {
   totalInvalidPoints: number;
   processedFilenames: string[];
   // validationErrors?: any[]; // Keep validation errors structure flexible
+  durationSeconds?: number;
+  totalDistanceMeters?: number;
+  avgSpeedKmh?: number;
+  maxSpeedKmh?: number;
 }
 
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+// Helper function to format seconds into H:M:S or M:S
+function formatDuration(totalSeconds: number): string {
+  if (isNaN(totalSeconds) || totalSeconds < 0) return "N/A";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+
+  let result = '';
+  if (hours > 0) {
+    result += `${hours}h `;
+  }
+  if (minutes > 0 || hours > 0) { // Show minutes if hours exist or minutes > 0
+    result += `${minutes}m `;
+  }
+  result += `${seconds}s`;
+  return result.trim();
 }
 
 export default function ProcessPage() {
@@ -92,6 +114,10 @@ export default function ProcessPage() {
         totalValidPoints: data.totalValidPoints || 0,
         totalInvalidPoints: data.totalInvalidPoints || 0,
         processedFilenames: data.processedFilenames || [],
+        durationSeconds: data.durationSeconds,
+        totalDistanceMeters: data.totalDistanceMeters,
+        avgSpeedKmh: data.avgSpeedKmh,
+        maxSpeedKmh: data.maxSpeedKmh,
         // validationErrors: data.validationErrors 
       });
 
@@ -236,28 +262,72 @@ export default function ProcessPage() {
     <div className="min-h-screen flex flex-col p-4 md:p-8 bg-stone-100 dark:bg-stone-950">
       <header className="flex-shrink-0 mb-4 md:mb-6">
         <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-wrap justify-between items-start gap-4">
-              <div className="flex-1 min-w-0">
-                <h1 className="text-xl md:text-2xl font-bold mb-1">Processing Files</h1>
-                <div className="flex flex-wrap gap-1">
-                  {filenames.map(name => (
-                    <Badge key={name} variant="secondary" className="whitespace-nowrap">{name}</Badge>
-                  ))}
+          <CardContent className="p-4 md:p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 items-start">
+              <div className="md:col-span-1 space-y-2">
+                <h1 className="text-xl font-semibold flex items-center">
+                  <FileText className="mr-2 h-5 w-5 text-blue-600 dark:text-blue-400" /> Drive Data
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  Visualizing drive data from selected files. Use the map and chat below to explore.
+                </p>
+                <div className="pt-1">
+                  <span className="text-xs font-medium text-muted-foreground">Source File(s):</span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {filenames.slice(0, 3).map(name => (
+                      <Badge key={name} variant="secondary" className="whitespace-nowrap text-xs font-normal" title={name}>{name.length > 25 ? name.substring(0, 22) + '...' : name}</Badge>
+                    ))}
+                    {filenames.length > 3 && (
+                      <Badge variant="outline" className="text-xs font-normal">+{filenames.length - 3} more</Badge>
+                    )}
+                  </div>
                 </div>
-                {metadata && (
-                  <p className="text-sm text-stone-500 dark:text-stone-400 mt-2">
-                    Valid: <span className="font-semibold">{metadata.totalValidPoints.toLocaleString()}</span> | Invalid: <span className="font-semibold">{metadata.totalInvalidPoints.toLocaleString()}</span>
-                  </p>
-                )}
               </div>
-              <div className="flex gap-2 shrink-0 items-center">
-                <Button size="sm" variant="secondary" onClick={() => setShowDebug(!showDebug)}>{showDebug ? 'Hide Summary' : 'Show Summary'}</Button>
-                <Button size="sm" variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
-                  <Bot className="mr-1.5 h-4 w-4" />
-                  {summaryLoading ? 'Generating...' : 'Summarize'}
-                </Button>
-                <Button size="sm" variant="outline" onClick={handleBackToHome}>Home</Button>
+
+              <div className="md:col-span-1 space-y-3 bg-stone-50 dark:bg-stone-900 p-3 rounded-md border">
+                 <h2 className="text-sm font-medium text-muted-foreground border-b pb-1 mb-2">Key Statistics</h2>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <div className="flex items-center" title="Total Valid Points">
+                     <CheckCircle className="mr-1.5 h-4 w-4 text-green-600" /> 
+                     <span className="font-medium">{metadata?.totalValidPoints?.toLocaleString() ?? 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Valid Pts</span>
+                  </div>
+                   <div className="flex items-center" title="Approximate Duration">
+                     <Clock className="mr-1.5 h-4 w-4 text-blue-600" /> 
+                     <span className="font-medium">{metadata?.durationSeconds ? formatDuration(metadata.durationSeconds) : 'N/A'}</span>
+                  </div>
+                   <div className="flex items-center" title="Approximate Distance">
+                     <Milestone className="mr-1.5 h-4 w-4 text-purple-600" /> 
+                     <span className="font-medium">{metadata?.totalDistanceMeters ? `${(metadata.totalDistanceMeters / 1000).toFixed(1)} km` : 'N/A'}</span>
+                  </div>
+                   <div className="flex items-center" title="Average Speed">
+                     <Gauge className="mr-1.5 h-4 w-4 text-orange-600" /> 
+                     <span className="font-medium">{metadata?.avgSpeedKmh ? `${metadata.avgSpeedKmh.toFixed(0)} km/h` : 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Avg</span>
+                  </div>
+                   <div className="flex items-center" title="Maximum Speed">
+                     <Gauge className="mr-1.5 h-4 w-4 text-red-600" /> 
+                     <span className="font-medium">{metadata?.maxSpeedKmh ? `${metadata.maxSpeedKmh.toFixed(0)} km/h` : 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Max</span>
+                  </div>
+                   <div className="flex items-center" title="Total Invalid Points">
+                     <AlertCircle className="mr-1.5 h-4 w-4 text-yellow-600" /> 
+                     <span className="font-medium">{metadata?.totalInvalidPoints?.toLocaleString() ?? 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Invalid Pts</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="md:col-span-1 flex flex-col md:items-end gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
+                    <Bot className="mr-1.5 h-4 w-4" />{summaryLoading ? 'Generating...' : 'Summarize (AI)'}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setShowDebug(!showDebug)}>
+                     <Info className="mr-1.5 h-4 w-4" />{showDebug ? 'Hide Raw Summary' : 'Show Raw Summary'}
+                  </Button>
+                </div>
+                <div className="mt-auto md:mt-4">
+                   <Button size="sm" variant="outline" onClick={handleBackToHome}>
+                     <ArrowLeft className="mr-1.5 h-4 w-4" /> Back to Upload
+                   </Button>
+                 </div>
               </div>
             </div>
           </CardContent>

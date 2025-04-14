@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
 import { DrivePoint } from '@/lib/types';
 import { JumpExportDialog } from '@/components/JumpExportDialog';
-import { Input } from "@/components/ui/input";
 import {
   MapIcon, PlusIcon, EyeIcon, EyeOffIcon, TargetIcon, CircleIcon,
   FilterIcon, XIcon, Trash2Icon, Settings2Icon, CheckIcon, GaugeIcon,
@@ -25,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { ObjectPointsPanel } from "./ManagedPointsPanel";
+import { MapControls } from './MapControls';
 
 // Constants for the debug point
 const DEBUG_POINT_LAT = 31.327642333333333; // Re-add constant
@@ -981,129 +981,36 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
   // --- UI Rendering ---
   return (
     <div className="space-y-4 h-full flex flex-col"> {/* Ensure parent div takes height */}
-       {/* --- Controls Section (Minimal Layout) --- */}
-       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 p-2 bg-stone-100 dark:bg-stone-800 rounded-lg shadow"> {/* Increased gap-y slightly */}
-
-          {/* View Mode Button */}
-          {/* Add TooltipProvider if using Tooltips */} 
-          <Button onClick={toggleViewMode} size="icon" variant="outline" title={viewMode === 'markers' ? 'Switch to Route View' : 'Switch to Marker View'}>
-            <MapIcon className="h-5 w-5" />
-          </Button>
-
-          {/* Add Dropdown */}
-          <DropdownMenu>
-             <DropdownMenuTrigger asChild>
-               <Button variant="outline" size="icon" title="Add Marker/Object" className={isAddingMarker ? 'ring-2 ring-blue-500' : ''}>
-                 <PlusIcon className="h-5 w-5" />
-               </Button>
-             </DropdownMenuTrigger>
-             <DropdownMenuContent>
-               <DropdownMenuItem onClick={enableMarkerPlacement} disabled={isAddingMarker}>
-                 <PlusCircle className="mr-2 h-4 w-4" /> Place Manually {isAddingMarker ? '(Active)' : ''}
-               </DropdownMenuItem>
-               <DropdownMenuItem onClick={() => setIsCoordinateDialogOpen(true)}>
-                 <MapPin className="mr-2 h-4 w-4" /> Add by Coords
-               </DropdownMenuItem>
-               {/* Add Separator if needed */}
-               {/* <DropdownMenuSeparator /> */}
-               {isAddingMarker && (
-                  <DropdownMenuItem onClick={disableMarkerPlacement} className="text-red-600 focus:text-red-700 focus:bg-red-50 dark:focus:bg-red-900/20"><XIcon className="mr-2 h-4 w-4" /> Cancel Placement</DropdownMenuItem>
-               )}
-             </DropdownMenuContent>
-           </DropdownMenu>
-
-          {/* Separator */}
-          <Separator orientation="vertical" className="h-6" /> 
-
-          {/* Default Object / Clear Selection Button */}
-          {!selectedObjectInfo.marker ? (
-             <Button variant="outline" onClick={addDefaultObject} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60" title="Set Default Calculation Object">
-               <MapPin className="mr-2 h-4 w-4" /> Set Default
-             </Button>
-           ) : (
-              <Button variant="outline" onClick={clearSelectedObject} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60" title={`Clear Selected Object (${selectedObjectInfo.lat?.toFixed(4)}, ${selectedObjectInfo.lng?.toFixed(4)})`}>
-                <PinOff className="mr-2 h-4 w-4" /> Clear Selection
-              </Button>
-           )}
-
-          {/* Distance Rings Button */}
-          <Button variant={showDistanceCircles ? "secondary" : "outline"} size="icon" onClick={toggleDistanceCircles} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}>
-            <CircleIcon className="h-5 w-5" />
-          </Button>
-
-          {/* Separator */}
-          <Separator orientation="vertical" className="h-6" /> 
-
-           {/* Filter Section (Popover Trigger + Active Filter Display) */}
-           <div className="flex items-center gap-2">
-             {/* Filter Popover Trigger */}
-             <Popover open={isFilterPopoverOpen} onOpenChange={setIsFilterPopoverOpen}>
-               <PopoverTrigger asChild>
-                  <Button variant="outline" size="icon" title="Filter Data Points" className={cn((distanceFilter !== null || speedFilter !== null) && 'ring-2 ring-blue-500')}>
-                    <FilterIcon className={cn("h-5 w-5", (distanceFilter !== null || speedFilter !== null) && 'text-blue-600 dark:text-blue-400')} />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-80"> {/* Adjust width as needed */} 
-                   <div className="grid gap-4">
-                     <div className="space-y-2">
-                        <h4 className="font-medium leading-none">Filters</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Filter points by distance or speed.
-                        </p>
-                      </div>
-                     <Separator />
-                     {/* Distance Filter Section */}
-                     <div className="space-y-3 p-1 rounded-md border border-dashed border-stone-300 dark:border-stone-700"> 
-                       <Label htmlFor="dist-tolerance" className="text-sm font-medium flex items-center text-stone-700 dark:text-stone-300">Distance Filter (±m)</Label>
-                        <p className="text-xs text-muted-foreground -mt-2">Requires a selected object.</p>
-                       <div className="flex items-center gap-2">
-                         <Input id="dist-tolerance" type="number" value={distanceTolerance} onChange={handleDistanceToleranceChange} min="0" step="0.1" className="flex-1 h-8 text-xs" title="Distance filter tolerance (meters)" disabled={!selectedObjectInfo.marker} />
-                         <Button variant={distanceFilter === null ? 'secondary' : 'outline'} size="sm" onClick={() => handleSetPresetFilter(null)} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select object first" : "Clear distance filter"} className="h-8 px-2 text-xs"><XIcon className="mr-1 h-3 w-3" /> All</Button>
-                       </div>
-                       <div className="flex flex-wrap items-center gap-1">
-                          {[10, 20, 30, 50, 100].map(dist => (<Button key={`dist-pop-${dist}`} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetFilter(dist)} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select object first" : `Filter ~${dist}m`} className="text-xs h-7 px-2">~{dist}m</Button>))}
-                       </div>
-                       <div className="flex items-center gap-2">
-                          <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange} placeholder="Manual (m)" disabled={!selectedObjectInfo.marker} min="0" className="flex-1 h-8 text-xs" title={!selectedObjectInfo.marker ? "Select object first" : "Enter distance to filter around"} />
-                          <Button variant="secondary" size="icon" className="h-8 w-8" onClick={handleApplyManualFilter} disabled={!selectedObjectInfo.marker || !manualDistanceInput} title={!selectedObjectInfo.marker ? "Select object first" : "Apply manual distance filter"} ><CheckIcon className="h-4 w-4" /></Button>
-                       </div>
-                     </div>
-                      {/* Speed Filter Section */}
-                     <div className="space-y-3 p-1 rounded-md border border-dashed border-stone-300 dark:border-stone-700">
-                       <Label htmlFor="speed-tolerance" className="text-sm font-medium flex items-center text-stone-700 dark:text-stone-300">Speed Filter (±km/h)</Label>
-                       <div className="flex items-center gap-2">
-                          <Input id="speed-tolerance" type="number" value={speedTolerance} onChange={handleSpeedToleranceChange} min="0" step="1" className="flex-1 h-8 text-xs" title="Speed filter tolerance (km/h)" />
-                          <Button variant={speedFilter === null ? 'secondary' : 'outline'} size="sm" onClick={() => handleSetPresetSpeedFilter(null)} title="Clear speed filter" className="h-8 px-2 text-xs"><XIcon className="mr-1 h-3 w-3" /> All</Button>
-                       </div>
-                       <div className="flex flex-wrap items-center gap-1">
-                          {[20, 50, 80, 100].map(speed => (<Button key={`speed-pop-${speed}`} variant={speedFilter === speed ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetSpeedFilter(speed)} title={`Filter ~${speed} km/h`} className="text-xs h-7 px-2">~{speed}</Button>))}
-                       </div>
-                       <div className="flex items-center gap-2">
-                         <Input type="number" value={manualSpeedInput} onChange={handleManualSpeedInputChange} placeholder="Manual (km/h)" min="0" className="flex-1 h-8 text-xs" title="Enter speed to filter around" />
-                         <Button variant="secondary" size="icon" className="h-8 w-8" onClick={handleApplyManualSpeedFilter} disabled={!manualSpeedInput} title="Apply manual speed filter" ><CheckIcon className="h-4 w-4" /></Button>
-                       </div>
-                     </div>
-                   </div>
-                 </PopoverContent>
-               </Popover>
-
-               {/* Active Filters Display */}
-               <div className="flex items-center gap-1">
-                 {distanceFilter !== null && (
-                   <Badge variant="secondary" className="text-xs px-1.5 py-0.5 font-normal" title={`Distance Filter: ~${distanceFilter}m (±${distanceTolerance}m)`}>
-                      Dist: ~{distanceFilter}m
-                   </Badge>
-                 )}
-                  {speedFilter !== null && (
-                   <Badge variant="secondary" className="text-xs px-1.5 py-0.5 font-normal" title={`Speed Filter: ~${speedFilter}km/h (±${speedTolerance}km/h)`}>
-                     Spd: ~{speedFilter}km/h
-                   </Badge>
-                 )}
-               </div>
-           </div>
-           {/* --- End Filter Section --- */}
-
-       </div>
+       {/* --- Render MapControls Component --- */}
+       <MapControls
+         viewMode={viewMode}
+         isAddingMarker={isAddingMarker}
+         selectedObjectInfo={selectedObjectInfo}
+         distanceFilter={distanceFilter}
+         speedFilter={speedFilter}
+         distanceTolerance={distanceTolerance}
+         speedTolerance={speedTolerance}
+         manualDistanceInput={manualDistanceInput}
+         manualSpeedInput={manualSpeedInput}
+         showDistanceCircles={showDistanceCircles}
+         isFilterPopoverOpen={isFilterPopoverOpen}
+         toggleViewMode={toggleViewMode}
+         enableMarkerPlacement={enableMarkerPlacement}
+         disableMarkerPlacement={disableMarkerPlacement}
+         setIsCoordinateDialogOpen={setIsCoordinateDialogOpen}
+         addDefaultObject={addDefaultObject}
+         clearSelectedObject={clearSelectedObject}
+         toggleDistanceCircles={toggleDistanceCircles}
+         handleSetPresetFilter={handleSetPresetFilter}
+         handleManualInputChange={handleManualInputChange}
+         handleApplyManualFilter={handleApplyManualFilter}
+         handleDistanceToleranceChange={handleDistanceToleranceChange}
+         handleSetPresetSpeedFilter={handleSetPresetSpeedFilter}
+         handleManualSpeedInputChange={handleManualSpeedInputChange}
+         handleApplyManualSpeedFilter={handleApplyManualSpeedFilter}
+         handleSpeedToleranceChange={handleSpeedToleranceChange}
+         setIsFilterPopoverOpen={setIsFilterPopoverOpen}
+       />
 
        {/* --- Map Container (Takes remaining space) --- */}
        <div className="flex-grow w-full rounded-lg shadow-md overflow-hidden relative z-0"> 
