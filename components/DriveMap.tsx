@@ -667,13 +667,21 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         const clipFormatted = String(clipNumber).padStart(4, '0');
         // --- END: Updated Clip Calculation ---
 
-        // --- Distance Label Logic (remains the same) ---
+        // --- Distance Label Logic --- 
         let distanceLabel = 'NoTarget'; 
         let refLat: number | null = null;
         let refLng: number | null = null;
         if (targetObjectPosition) { refLat = targetObjectPosition.lat; refLng = targetObjectPosition.lng; }
         else if (isDebugPointVisible) { refLat = DEBUG_POINT_LAT; refLng = DEBUG_POINT_LNG; }
-        if (refLat !== null && refLng !== null) { const distance = calculateDistance(point.lat, point.lng, refLat, refLng); distanceLabel = `${Math.round(distance)}m`; }
+        
+        if (refLat !== null && refLng !== null) { 
+            const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
+            // Start with the distance part
+            distanceLabel = `${Math.round(distance)}m`;
+            // Append the speed part
+            const speedKmh = Math.round(point.speed.kmh);
+            distanceLabel += `_${speedKmh}kmh`; 
+        }
         
         // Construct the line
         return `${settings.sessionName}_s001_${settings.view}_s60_${clipFormatted} ${settings.camera} ${point.frameId} ${distanceLabel}`;
