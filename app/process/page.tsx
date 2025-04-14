@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Button } from "@/components/ui/button";
 import dynamic from 'next/dynamic';
+import { DrivePoint } from '@/lib/types';
 
 const DriveMap = dynamic(
   () => import('@/components/DriveMap'),
@@ -14,15 +15,6 @@ const DriveMap = dynamic(
     </div>
   }
 );
-
-interface DrivePoint {
-  frameId: number;
-  lat: number;
-  lng: number;
-  altitude?: number;
-  speed?: number;
-  timestamp?: string;
-}
 
 interface DataMetadata {
   totalPointsInFile: number;

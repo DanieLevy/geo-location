@@ -8,7 +8,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.markercluster';
 import { Button } from "@/components/ui/button";
 import { CoordinateDialog } from "@/components/ui/CoordinateDialog";
-import { DrivePoint } from '@/lib/types'; // Assuming DrivePoint type is defined here
+import { DrivePoint } from '@/lib/types';
 import { JumpExportDialog } from '@/components/JumpExportDialog';
 
 // Constants for the debug point
@@ -123,8 +123,9 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
     });
 
     // Add right-click handler to the cluster group after it's created
-    markerClusterRef.current.on('clustercontextmenu', (e: L.LeafletMouseEvent) => {
-      const cluster = e.layer as L.MarkerCluster;
+    markerClusterRef.current.on('clustercontextmenu', (e: any) => {
+      // Cast cluster to any to access internal _leaflet_id (type definitions might be incomplete/strict)
+      const cluster = e.layer as any;
       const markerCount = cluster.getChildCount();
       
       // Create DOM element for the popup content
@@ -150,7 +151,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       csvExportButton.innerText = 'Export to CSV';
       csvExportButton.onclick = () => {
           const filenameInput = document.getElementById(`csv-filename-${cluster._leaflet_id}`) as HTMLInputElement;
-          const data = prepareMarkerDataForExport(cluster);
+          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster);
           if (data && data.length > 0) {
             let filename = filenameInput.value.trim() || 'map-data';
             if (!filename.endsWith('.csv')) filename += '.csv';
@@ -166,10 +167,10 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       jumpExportButton.className = "ml-2 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"; // Style differently
       jumpExportButton.innerText = 'Export as .jump';
       jumpExportButton.onclick = () => {
-          const data = prepareMarkerDataForExport(cluster);
+          const data = prepareMarkerDataForExport(cluster as L.MarkerCluster);
           if (data && data.length > 0) {
               // Extract DrivePoints needed for jump export
-              const drivePointsToExport = data.map(d => d.drivePoint).filter(Boolean) as DrivePoint[];
+              const drivePointsToExport = data.map(d => d!.drivePoint).filter(Boolean) as DrivePoint[];
               setPointsForJumpExport(drivePointsToExport); // Store points for dialog
               setIsJumpExportDialogOpen(true); // Open the dialog
               contextMenu.close(); // Close the popup
@@ -234,7 +235,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
             <div><strong>Lat:</strong> ${point.lat.toFixed(6)}</div>
             <div><strong>Lng:</strong> ${point.lng.toFixed(6)}</div>
             ${point.altitude ? `<div><strong>Alt:</strong> ${point.altitude.toFixed(1)}m</div>` : ''}
-            <div><strong>Speed:</strong> ${point.speed.kmh.toFixed(1)} km/h (${point.speed.ms.toFixed(1)} m/s)</div>
+            <div><strong>Speed:</strong> ${point.speed?.kmh?.toFixed(1) ?? 'N/A'} km/h (${point.speed?.ms?.toFixed(1) ?? 'N/A'} m/s)</div>
             ${distanceInfo}
             ${point.timestamp ? `<div><strong>Time:</strong> ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
           </div>`;
@@ -253,7 +254,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
       if (routeCoordinates.length > 0) {
         // Create gradient polyline based on speed
         const segments = routeCoordinates.slice(1).map((coord, i) => {
-          const speed = filteredPoints[i + 1].speed.kmh;
+          // Use optional chaining and provide a default
+          const speed = filteredPoints[i + 1].speed?.kmh ?? 0;
           const color = getSpeedColor(speed);
           return {
             coordinates: [routeCoordinates[i], coord],
@@ -452,8 +454,9 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         date: formattedDate,
         time: formattedTime,
         altitude: point.altitude || '',
-        speed_ms: point.speed.ms,
-        speed_kmh: point.speed.kmh,
+        // Provide defaults if speed is undefined
+        speed_ms: point.speed?.ms ?? 0,
+        speed_kmh: point.speed?.kmh ?? 0,
         distance_from_reference: distance ? distance.toFixed(2) : '',
       };
     }).filter(Boolean);
@@ -752,7 +755,8 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
         if (refLat !== null && refLng !== null) {
             const distance = calculateDistance(point.lat, point.lng, refLat, refLng);
             distanceLabel = `${Math.round(distance)}m`;
-            const speedKmh = Math.round(point.speed.kmh);
+            // Use optional chaining for speed
+            const speedKmh = Math.round(point.speed?.kmh ?? 0);
             distanceLabel += `_${speedKmh}kmh`;
         }
 
