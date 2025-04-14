@@ -233,45 +233,40 @@ export default function ProcessPage() {
   }
 
   return (
-    <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950">
-      <main className="max-w-full mx-auto px-4">
-        <Card className="mb-6">
+    <div className="min-h-screen flex flex-col p-4 md:p-8 bg-stone-100 dark:bg-stone-950">
+      <header className="flex-shrink-0 mb-4 md:mb-6">
+        <Card>
           <CardContent className="p-4">
-             <div className="flex flex-wrap justify-between items-start gap-4">
+            <div className="flex flex-wrap justify-between items-start gap-4">
               <div className="flex-1 min-w-0">
-                 <h1 className="text-2xl font-bold mb-1">Processing Files</h1>
+                <h1 className="text-xl md:text-2xl font-bold mb-1">Processing Files</h1>
                 <div className="flex flex-wrap gap-1">
-                   {filenames.map(name => (
-                     <Badge key={name} variant="secondary" className="whitespace-nowrap">{name}</Badge>
-                   ))}
-                 </div>
+                  {filenames.map(name => (
+                    <Badge key={name} variant="secondary" className="whitespace-nowrap">{name}</Badge>
+                  ))}
+                </div>
                 {metadata && (
                   <p className="text-sm text-stone-500 dark:text-stone-400 mt-2">
-                    Total valid points: <span className="font-semibold">{metadata.totalValidPoints.toLocaleString()}</span> | Total Invalid: <span className="font-semibold">{metadata.totalInvalidPoints.toLocaleString()}</span>
+                    Valid: <span className="font-semibold">{metadata.totalValidPoints.toLocaleString()}</span> | Invalid: <span className="font-semibold">{metadata.totalInvalidPoints.toLocaleString()}</span>
                   </p>
                 )}
               </div>
               <div className="flex gap-2 shrink-0 items-center">
-                 <Button
-                  variant="secondary"
-                  onClick={() => setShowDebug(!showDebug)}
-                >
-                   {showDebug ? 'Hide Summary' : 'Show Summary'}
+                <Button size="sm" variant="secondary" onClick={() => setShowDebug(!showDebug)}>{showDebug ? 'Hide Summary' : 'Show Summary'}</Button>
+                <Button size="sm" variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
+                  <Bot className="mr-1.5 h-4 w-4" />
+                  {summaryLoading ? 'Generating...' : 'Summarize'}
                 </Button>
-                <Button variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
-                  <Bot className="mr-2 h-4 w-4" />
-                  {summaryLoading ? 'Generating...' : 'Summarize with AI'}
-                </Button>
-                <Button variant="outline" onClick={handleBackToHome}>
-                  Back to Home
-                </Button>
+                <Button size="sm" variant="outline" onClick={handleBackToHome}>Home</Button>
               </div>
             </div>
-           </CardContent>
+          </CardContent>
         </Card>
+      </header>
 
-        {summaryLoading || summaryText || summaryError && (
-          <Card className="mb-6">
+      {summaryLoading || summaryText || summaryError && (
+        <div className="flex-shrink-0 mb-4 md:mb-6">
+          <Card>
             <CardContent className="p-4">
               {summaryLoading && (
                 <div className="flex items-center text-stone-600 dark:text-stone-400">
@@ -297,84 +292,87 @@ export default function ProcessPage() {
               )}
             </CardContent>
           </Card>
-        )}
+        </div>
+      )}
 
-        {showDebug && renderDebugInfo()}
+      {showDebug && <div className="flex-shrink-0 mb-4 md:mb-6">{renderDebugInfo()}</div>}
 
-        <Card className="mb-6">
-          <CardHeader>
-            <div className="flex justify-between items-start">
-              <div className="flex-1 mr-4">
-                <CardTitle className="flex items-center mb-1">
-                  <Bot className="mr-2 h-5 w-5 text-blue-600 dark:text-blue-400" />
-                  Chat About Drive Data
-                </CardTitle>
-                <CardDescription>Ask questions about the loaded CSV file(s).</CardDescription>
+      <main className="flex-grow flex flex-col md:flex-row gap-4 md:gap-6 overflow-hidden">
+        <div className="flex-grow w-full md:w-2/3 lg:w-3/4 h-[60vh] md:h-auto rounded-lg overflow-hidden shadow-md">
+          <DriveMap points={points} />
+        </div>
+        <div className="flex-shrink-0 w-full md:w-1/3 lg:w-1/4 h-[40vh] md:h-auto">
+          <Card className="h-full flex flex-col">
+            <CardHeader className="flex-shrink-0">
+              <div className="flex justify-between items-start">
+                <div className="flex-1 mr-4">
+                  <CardTitle className="flex items-center text-lg mb-1">
+                    <Bot className="mr-2 h-5 w-5 text-blue-600 dark:text-blue-400" />
+                    Chat
+                  </CardTitle>
+                  <CardDescription className="text-xs">Ask about the loaded data.</CardDescription>
+                </div>
+                <div className="w-auto max-w-[180px]">
+                  <Label htmlFor="chat-model-select" className="text-xs text-stone-500 dark:text-stone-400 mb-1 block">Model:</Label>
+                  <Select value={selectedChatModel ?? undefined} onValueChange={(value) => setSelectedChatModel(value)} disabled={modelsLoading || aiModels.length === 0}>
+                    <SelectTrigger id="chat-model-select" className="h-8 text-xs">
+                      <SelectValue placeholder={modelsLoading ? "Loading..." : (modelsError ? "Error" : "Select...")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modelsError ? (
+                        <SelectItem value="error" disabled>{modelsError}</SelectItem>
+                      ) : (
+                        aiModels.filter(m => m.type === 'llm' || m.type === 'vlm').map(model => (
+                          <SelectItem key={model.id} value={model.id} title={model.id} className="text-xs">
+                            <div className="flex items-center justify-between w-full">
+                              <span className="truncate max-w-[150px]">{model.id}</span>
+                              <Badge variant={model.state === 'loaded' ? 'default' : 'outline'} className="ml-1 text-xs px-1 py-0">
+                                {model.state}
+                              </Badge>
+                            </div>
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="w-full max-w-[250px]">
-                <Label htmlFor="chat-model-select" className="text-xs text-stone-500 dark:text-stone-400 mb-1 block">Chat Model:</Label>
-                <Select value={selectedChatModel ?? undefined} onValueChange={(value) => setSelectedChatModel(value)} disabled={modelsLoading || aiModels.length === 0}>
-                  <SelectTrigger id="chat-model-select" className="h-9">
-                    <SelectValue placeholder={modelsLoading ? "Loading models..." : (modelsError ? "Error loading" : "Select model")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {modelsError ? (
-                      <SelectItem value="error" disabled>{modelsError}</SelectItem>
-                    ) : (
-                      aiModels.filter(m => m.type === 'llm' || m.type === 'vlm').map(model => (
-                        <SelectItem key={model.id} value={model.id} title={model.id}>
-                          <div className="flex items-center justify-between w-full">
-                            <span className="truncate max-w-[180px]">{model.id}</span>
-                            <Badge variant={model.state === 'loaded' ? 'default' : 'outline'} className="ml-2 text-xs px-1.5 py-0.5">{model.state}</Badge>
-                          </div>
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="h-[300px] w-full border rounded-md p-4 mb-4 bg-stone-50 dark:bg-stone-900" ref={chatContainerRef}>
-              <div className="space-y-4">
-                {chatMessages.map((message, index) => (
-                  <div key={index} className={cn("flex items-start gap-3", message.role === 'user' ? 'justify-end' : '')}>
-                    <div className={cn("p-3 rounded-lg max-w-[75%]", message.role === 'user' ? 'bg-blue-600 text-white dark:bg-blue-700' : 'bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100')}>
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+            </CardHeader>
+            <CardContent className="flex-grow flex flex-col p-4 overflow-hidden">
+              <ScrollArea className="flex-grow mb-4 border rounded-md bg-stone-50 dark:bg-stone-900" ref={chatContainerRef}>
+                <div className="p-4 space-y-4">
+                  {chatMessages.map((message, index) => (
+                    <div key={index} className={cn("flex items-start gap-3", message.role === 'user' ? 'justify-end' : '')}>
+                      <div className={cn("p-2 md:p-3 rounded-lg max-w-[85%]", message.role === 'user' ? 'bg-blue-600 text-white dark:bg-blue-700' : 'bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100')}>
+                        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {chatLoading && (
-                  <div className="flex items-start gap-3">
-                    <div className="p-3 rounded-lg bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100">
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                  ))}
+                  {chatLoading && (
+                    <div className="flex items-start gap-3">
+                      <div className="p-3 rounded-lg bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+              </ScrollArea>
+              {chatError && (
+                <Alert variant="destructive" className="mb-4 flex-shrink-0">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle className="text-sm">Chat Error</AlertTitle>
+                  <AlertDescription className="text-xs">{chatError}</AlertDescription>
+                </Alert>
+              )}
+              <div className="flex-shrink-0 flex gap-2">
+                <Input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Ask about the data..." className="flex-1 h-9" disabled={chatLoading} onKeyDown={(e) => e.key === 'Enter' && !chatLoading && handleSendChatMessage()} />
+                <Button size="icon" className="h-9 w-9" onClick={handleSendChatMessage} disabled={chatLoading || !chatInput.trim()}>
+                  <Send className="h-4 w-4" />
+                </Button>
               </div>
-            </ScrollArea>
-            {chatError && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Chat Error</AlertTitle>
-                <AlertDescription>{chatError}</AlertDescription>
-              </Alert>
-            )}
-            <div className="flex gap-2">
-              <Input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Ask about the data..." className="flex-1" disabled={chatLoading} onKeyDown={(e) => e.key === 'Enter' && !chatLoading && handleSendChatMessage()} />
-              <Button onClick={handleSendChatMessage} disabled={chatLoading || !chatInput.trim()}>
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {!error && (
-          <div className="space-y-4">
-             <DriveMap points={points} />
-           </div>
-        )}
+            </CardContent>
+          </Card>
+        </div>
       </main>
     </div>
   );

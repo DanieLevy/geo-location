@@ -974,12 +974,12 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
 
   // --- UI Rendering ---
   return (
-    <div className="space-y-4">
-       {/* --- Controls Section --- */}
-       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg shadow">
+    <div className="space-y-4 h-full flex flex-col"> {/* Ensure parent div takes height */}
+       {/* --- Controls Section (Modified Layout) --- */}
+       <div className="flex-shrink-0 flex flex-wrap items-center gap-x-4 gap-y-3 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg shadow"> {/* Increased gap-y slightly */}
 
           {/* Group 1: View & Add */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0"> {/* Added flex-shrink-0 */}
             <Button onClick={toggleViewMode} size="sm" variant="outline">
               <MapIcon className="mr-2 h-4 w-4" />
               {viewMode === 'markers' ? 'Route View' : 'Marker View'}
@@ -998,7 +998,7 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
           </div>
 
           {/* Group 2: Object Selection & Rings */}
-          <div className="flex items-center gap-2 border-l pl-4 flex-shrink-0">
+          <div className="flex items-center gap-2 border-l pl-4 flex-shrink-0"> {/* Added flex-shrink-0 */}
              {/* Button to add default object */}
              {!selectedObjectInfo.marker ? (
               <Button variant="outline" onClick={addDefaultObject} size="sm" className="bg-yellow-100 hover:bg-yellow-200 dark:bg-yellow-800/50 dark:hover:bg-yellow-700/60">
@@ -1009,164 +1009,71 @@ export default function DriveMap({ points, onMarkerAdd }: DriveMapProps) {
                  <PinOff className="mr-2 h-4 w-4" /> Clear Selection
                </Button>
             )}
-            {/* Distance Rings Button - Depends on selected object */}
-            <Button 
-              variant={showDistanceCircles ? "secondary" : "outline"} 
-              size="sm" 
-              onClick={toggleDistanceCircles}
-              disabled={!selectedObjectInfo.marker} 
-              title={!selectedObjectInfo.marker ? "Select an object first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}
-            >
+            {/* Distance Rings Button */} 
+            <Button variant={showDistanceCircles ? "secondary" : "outline"} size="sm" onClick={toggleDistanceCircles} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : (showDistanceCircles ? "Hide Distance Rings" : "Show Distance Rings")}>
               <CircleIcon className="mr-2 h-4 w-4" /> Rings
             </Button>
           </div>
 
-          {/* Separator */}
-          <Separator orientation="vertical" className="h-auto mx-2 hidden md:block" />
-
-           {/* Group 3: Filtering (Distance depends on Selected Object) */}
-           <div className="flex flex-col gap-3 flex-grow min-w-[300px]">
-               {/* Distance Filtering Row - Update titles/disabled states */}
+           {/* Group 3: Filtering (Moved to be direct child) */}
+           <div className="flex flex-col gap-3 flex-grow min-w-[300px] border-l pl-4"> {/* Added border-l and pl-4 */}
+               {/* Distance Filtering Row */}
                <div className="flex flex-wrap items-center gap-2">
-                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by distance from Selected Object">
-                     <FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Dist (±
-                   </span>
-                   <Input
-                     type="number"
-                     value={distanceTolerance}
-                     onChange={handleDistanceToleranceChange}
-                     min="0" step="0.1"
-                     className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                     title="Set distance filter tolerance (meters)"
-                     disabled={!selectedObjectInfo.marker} 
-                   />
+                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by distance from Selected Object"><FilterIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Dist (±</span>
+                   <Input type="number" value={distanceTolerance} onChange={handleDistanceToleranceChange} min="0" step="0.1" className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600" title="Set distance filter tolerance (meters)" disabled={!selectedObjectInfo.marker} />
                    <span className="text-sm font-medium mr-2 shrink-0">m):</span>
-
                    <div className="flex items-center gap-1 flex-wrap">
-                      {[10, 20, 30, 50, 100, 200].map(dist => (
-                        <Button key={`dist-${dist}`} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm"
-                          onClick={() => handleSetPresetFilter(dist)}
-                          disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : `Filter ~${dist}m`} >
-                          ~{dist}m
-                        </Button>
-                      ))}
-                       <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange}
-                        placeholder="Manual (m)" disabled={!selectedObjectInfo.marker} min="0"
-                        className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                        title={!selectedObjectInfo.marker ? "Select an object first" : "Enter distance to filter around"} />
-                      <Button variant="secondary" size="sm" onClick={handleApplyManualFilter}
-                        disabled={!selectedObjectInfo.marker || !manualDistanceInput} title={!selectedObjectInfo.marker ? "Select an object first" : "Apply manual distance filter"} >
-                        <CheckIcon className="h-4 w-4" />
-                      </Button>
-                       <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm"
-                          onClick={() => handleSetPresetFilter(null)}
-                          disabled={!selectedObjectInfo.marker} 
-                          title={!selectedObjectInfo.marker ? "Select an object first" : "Show all points (clear distance filter)"}>
-                          <XIcon className="mr-1 h-4 w-4" /> All Dist
-                        </Button>
+                      {[10, 20, 30, 50, 100, 200].map(dist => (<Button key={`dist-${dist}`} variant={distanceFilter === dist ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetFilter(dist)} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : `Filter ~${dist}m`} >~{dist}m</Button>))}
+                       <Input type="number" value={manualDistanceInput} onChange={handleManualInputChange} placeholder="Manual (m)" disabled={!selectedObjectInfo.marker} min="0" className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600" title={!selectedObjectInfo.marker ? "Select an object first" : "Enter distance to filter around"} />
+                      <Button variant="secondary" size="sm" onClick={handleApplyManualFilter} disabled={!selectedObjectInfo.marker || !manualDistanceInput} title={!selectedObjectInfo.marker ? "Select an object first" : "Apply manual distance filter"} ><CheckIcon className="h-4 w-4" /></Button>
+                       <Button variant={distanceFilter === null ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetFilter(null)} disabled={!selectedObjectInfo.marker} title={!selectedObjectInfo.marker ? "Select an object first" : "Show all points (clear distance filter)"}><XIcon className="mr-1 h-4 w-4" /> All Dist</Button>
                    </div>
                </div>
 
-                {/* Speed Filtering Row (remains same) */}
+                {/* Speed Filtering Row */}
                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by speed (km/h)">
-                     <GaugeIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Speed (±
-                   </span>
-                   <Input
-                     type="number"
-                     value={speedTolerance}
-                     onChange={handleSpeedToleranceChange}
-                     min="0" step="1" // Sensible step for km/h
-                     className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                     title="Set speed filter tolerance (km/h)"
-                   />
+                   <span className="text-sm font-medium flex items-center shrink-0" title="Filter points by speed (km/h)"><GaugeIcon className="mr-2 h-4 w-4 text-stone-600 dark:text-stone-400"/> Speed (±</span>
+                   <Input type="number" value={speedTolerance} onChange={handleSpeedToleranceChange} min="0" step="1" className="px-2 py-1 w-16 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600" title="Set speed filter tolerance (km/h)" />
                    <span className="text-sm font-medium mr-2 shrink-0">km/h):</span>
-
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {[20, 50, 80, 100].map(speed => (
-                        <Button key={`speed-${speed}`} variant={speedFilter === speed ? 'default' : 'outline'} size="sm"
-                          onClick={() => handleSetPresetSpeedFilter(speed)}
-                          title={`Filter ~${speed} km/h`} >
-                          ~{speed}
-                        </Button>
-                      ))}
-                       <Input type="number" value={manualSpeedInput} onChange={handleManualSpeedInputChange}
-                        placeholder="Manual (km/h)" min="0"
-                        className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600"
-                        title={"Enter speed to filter around"} />
-                      <Button variant="secondary" size="sm" onClick={handleApplyManualSpeedFilter}
-                        disabled={!manualSpeedInput} title={"Apply manual speed filter"} >
-                        <CheckIcon className="h-4 w-4" />
-                      </Button>
-                       <Button variant={speedFilter === null ? 'default' : 'outline'} size="sm"
-                          onClick={() => handleSetPresetSpeedFilter(null)}
-                          title={"Show all points (clear speed filter)"}>
-                          <XIcon className="mr-1 h-4 w-4" /> All Speed
-                        </Button>
+                   <div className="flex items-center gap-1 flex-wrap">
+                      {[20, 50, 80, 100].map(speed => (<Button key={`speed-${speed}`} variant={speedFilter === speed ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetSpeedFilter(speed)} title={`Filter ~${speed} km/h`} >~{speed}</Button>))}
+                       <Input type="number" value={manualSpeedInput} onChange={handleManualSpeedInputChange} placeholder="Manual (km/h)" min="0" className="px-2 py-1 w-28 text-sm h-9 disabled:opacity-50 dark:bg-stone-700 dark:border-stone-600" title={"Enter speed to filter around"} />
+                      <Button variant="secondary" size="sm" onClick={handleApplyManualSpeedFilter} disabled={!manualSpeedInput} title={"Apply manual speed filter"} ><CheckIcon className="h-4 w-4" /></Button>
+                       <Button variant={speedFilter === null ? 'default' : 'outline'} size="sm" onClick={() => handleSetPresetSpeedFilter(null)} title={"Show all points (clear speed filter)"}><XIcon className="mr-1 h-4 w-4" /> All Speed</Button>
                    </div>
                </div>
            </div>
-
       </div>
 
-       {/* --- Main Map Area (Map + Panel) --- */}
-       <div className="flex flex-col md:flex-row gap-4 items-start"> 
-         {/* Map Container */}
-         <div className="flex-grow w-full"> {/* Map takes available space */}
-           <div ref={mapContainerRef} style={{ height: '70vh' }} className="rounded-lg shadow-md relative z-0" />
-         </div>
+       {/* --- Map Container (Takes remaining space) --- */}
+       <div className="flex-grow w-full rounded-lg shadow-md overflow-hidden relative z-0"> 
+         <div ref={mapContainerRef} className="h-full w-full" /> {/* Map needs defined size */}
+       </div>
 
-         {/* Object Points Panel (Side Panel) */}
-         <div className="w-full md:w-1/3 lg:w-1/4 shrink-0"> 
-            {/* Use renamed component and props */}
-            <ObjectPointsPanel 
-              objects={objectMarkers}
-              onRemove={removeManagedMarker}
-              onSelectObject={handleSelectObject}
-              onZoomTo={handleZoomTo}
-              currentSelectedId={selectedObjectInfo.marker ? L.Util.stamp(selectedObjectInfo.marker) : null}
-            />
-         </div>
-      </div>
+       {/* Dialogs */}
+       <CoordinateDialog
+         isOpen={isCoordinateDialogOpen}
+         onClose={() => setIsCoordinateDialogOpen(false)}
+        onSave={(coords) => { addMarker(coords.lat, coords.lng, coords); }}
+      />
+      <JumpExportDialog
+        isOpen={isJumpExportDialogOpen}
+        sourceFiles={sourceFilesForJumpExport}
+        onClose={() => {
+            setIsJumpExportDialogOpen(false);
+            setPointsForJumpExport(null);
+            setSourceFilesForJumpExport([]);
+        }}
+        onSubmit={(settingsPerFile) => {
+          if (pointsForJumpExport) {
+              exportToJump(settingsPerFile, pointsForJumpExport);
+          }
+          setIsJumpExportDialogOpen(false);
+          setPointsForJumpExport(null);
+          setSourceFilesForJumpExport([]);
+        }}
+      />
 
-      {/* Dialogs */}
-      <CoordinateDialog
-        isOpen={isCoordinateDialogOpen}
-        onClose={() => setIsCoordinateDialogOpen(false)}
-       onSave={(coords) => { addMarker(coords.lat, coords.lng, coords); }}
-     />
-     <JumpExportDialog
-       isOpen={isJumpExportDialogOpen}
-       sourceFiles={sourceFilesForJumpExport} // Pass the source files
-       onClose={() => {
-           setIsJumpExportDialogOpen(false);
-           setPointsForJumpExport(null); // Clear stored points
-           setSourceFilesForJumpExport([]); // Clear stored source files
-       }}
-       onSubmit={(settingsPerFile) => {
-         if (pointsForJumpExport) { // Check if points are stored
-             exportToJump(settingsPerFile, pointsForJumpExport); // Pass settingsPerFile and points
-         }
-         setIsJumpExportDialogOpen(false); // Close dialog on submit
-         setPointsForJumpExport(null); // Clear stored points
-         setSourceFilesForJumpExport([]); // Clear stored source files
-       }}
-     />
-
-       {/* Speed Legend */}
-       {viewMode === 'route' && (
-         <div className="px-4 py-2 bg-stone-100 dark:bg-stone-700 rounded-lg">
-            <div className="text-sm font-medium mb-2">Speed Legend (km/h):</div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[ { color: '#22c55e', label: '< 20' }, { color: '#eab308', label: '20-50' }, { color: '#f97316', label: '50-80' }, { color: '#ef4444', label: '> 80' } ].map(item => (
-                 <div key={item.label} className="flex items-center gap-2">
-                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: item.color }}></div>
-                   <span className="text-sm">{item.label}</span>
-             </div>
-              ))}
-           </div>
-         </div>
-       )}
     </div>
   );
 } 
