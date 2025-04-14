@@ -25,24 +25,9 @@ interface DrivePoint {
 }
 
 interface DataMetadata {
-  totalPoints: number;
-  currentPage: number;
-  totalPages: number;
-  pointsPerPage: number;
-  isSampled: boolean;
-  debug?: {
-    fileExists: boolean;
-    totalLinesRead: number;
-    selectedLinesCount: number;
-    validPointsCount: number;
-    invalidPointsCount: number;
-    firstValidPoint: DrivePoint;
-    lastValidPoint: DrivePoint;
-    validationErrors?: Array<{
-      line: number;
-      errors: string[];
-    }>;
-  };
+  totalPointsInFile: number;
+  invalidPointsDetected: number;
+  validationErrors?: Array<{ line: number; errors: string[]; rawData: any }>;
 }
 
 export default function ProcessPage() {
@@ -52,127 +37,84 @@ export default function ProcessPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [points, setPoints] = useState<DrivePoint[]>([]);
-  const [metadata, setMetadata] = useState<DataMetadata | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isSampledView, setIsSampledView] = useState(true);
+  const [metadata, setMetadata] = useState<{ totalPointsInFile: number; invalidPointsDetected: number; validationErrors?: any[] } | null>(null);
   const [showDebug, setShowDebug] = useState(false);
 
-  const fetchData = async (page: number, sample: boolean = false) => {
-    try {
-      console.log('Debug - Fetching data:', { page, sample, filename });
-      
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/csv-data/${filename}?page=${page}&sample=${sample}`
-      );
-      
-      if (!response.ok) throw new Error('Failed to fetch file');
-      
-      const data = await response.json();
-      console.log('Debug - Received data:', data);
-      
-      if (sample || page === 1) {
-        setPoints(data.points);
-      } else {
-        setPoints(prev => [...prev, ...data.points]);
-      }
-      
-      setMetadata(data.metadata);
-      setLoading(false);
-    } catch (err) {
-      console.error('Debug - Error:', err);
-      setError('Failed to load or parse the file');
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
+  const fetchData = async () => {
     if (!filename) {
       setError('No file selected');
       setLoading(false);
       return;
     }
-
-    // Initial load with sampling
-    fetchData(1, true);
-  }, [filename]);
-
-  const handleLoadMore = async () => {
-    if (!metadata || currentPage >= metadata.totalPages) return;
-    
-    const nextPage = currentPage + 1;
-    await fetchData(nextPage, false);
-    setCurrentPage(nextPage);
-  };
-
-  const toggleViewMode = async () => {
     setLoading(true);
-    setIsSampledView(!isSampledView);
-    
-    if (isSampledView) {
-      // Switching to full view - load first page
-      setCurrentPage(1);
-      await fetchData(1, false);
-    } else {
-      // Switching to sampled view
-      await fetchData(1, true);
+    setError(null);
+    try {
+      console.log('Debug - Fetching data for:', filename);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/csv-data/${filename}`
+      );
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to fetch file data' }));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Debug - Received data:', data);
+      
+      setPoints(data.points || []);
+      
+      setMetadata({
+        totalPointsInFile: data.totalPointsInFile || 0,
+        invalidPointsDetected: data.invalidPointsDetected || 0,
+        validationErrors: data.validationErrors 
+      });
+      setLoading(false);
+    } catch (err: any) {
+      console.error('Debug - Error fetching data:', err);
+      setError(err.message || 'Failed to load or parse the file');
+      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, [filename]);
 
   const handleBackToHome = () => {
     window.location.href = '/';
   };
 
   const renderDebugInfo = () => {
-    if (!metadata?.debug) return null;
+    if (!metadata?.validationErrors || metadata.validationErrors.length === 0) {
+        return (
+            <div className="mt-4 p-4 bg-gray-100 dark:bg-stone-700 rounded-lg">
+                <h3 className="text-lg font-semibold mb-2">Debug Information</h3>
+                <p>No validation errors detected, or debug info not available.</p>
+            </div>
+        );
+    }
 
     return (
       <div className="mt-4 p-4 bg-gray-100 dark:bg-stone-700 rounded-lg overflow-x-auto">
-        <h3 className="text-lg font-semibold mb-2">Debug Information</h3>
-        <div className="space-y-4 font-mono text-sm">
-          <div className="space-y-2">
-            <div>File Status: {metadata.debug.fileExists ? '✅ Found' : '❌ Not Found'}</div>
-            <div>Total Lines Read: {metadata.debug.totalLinesRead}</div>
-            <div>Selected Lines: {metadata.debug.selectedLinesCount}</div>
-            <div>Valid Points: {metadata.debug.validPointsCount}</div>
-            <div>Invalid Points: {metadata.debug.invalidPointsCount || 0}</div>
-          </div>
-
-          {metadata.debug.validationErrors && metadata.debug.validationErrors.length > 0 && (
-            <div className="mt-4">
-              <h4 className="font-semibold mb-2">Validation Errors (Sample)</h4>
-              <div className="space-y-2">
-                {metadata.debug.validationErrors.map((error, index) => (
-                  <div key={index} className="p-2 bg-red-100 dark:bg-red-900/20 rounded">
-                    <div className="font-semibold">Line {error.line + 1}:</div>
-                    <ul className="list-disc list-inside">
-                      {error.errors.map((err, errIndex) => (
-                        <li key={errIndex} className="text-red-600 dark:text-red-400">
-                          {err}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+        <h3 className="text-lg font-semibold mb-2">Validation Errors</h3>
+        <p className="text-sm mb-2">Showing {metadata.validationErrors.length} lines that failed validation:</p>
+        <div className="space-y-2 font-mono text-sm">
+          {metadata.validationErrors.map((error, index) => (
+            <div key={index} className="p-2 bg-red-100 dark:bg-red-900/20 rounded">
+              <div className="font-semibold">Original Line ~{error.line}:</div>
+              <pre className="text-xs mt-1 p-1 bg-gray-200 dark:bg-stone-600 rounded overflow-x-auto">
+                {JSON.stringify(error.rawData)}
+              </pre>
+              <ul className="list-disc list-inside mt-1">
+                {error.errors.map((err: string, errIndex: number) => (
+                  <li key={errIndex} className="text-red-600 dark:text-red-400">
+                    {err}
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
-          )}
-
-          {metadata.debug.firstValidPoint && (
-            <div>
-              <div>First Valid Point:</div>
-              <pre className="p-2 bg-gray-200 dark:bg-stone-800 rounded">
-                {JSON.stringify(metadata.debug.firstValidPoint, null, 2)}
-              </pre>
-            </div>
-          )}
-          {metadata.debug.lastValidPoint && (
-            <div>
-              <div>Last Valid Point:</div>
-              <pre className="p-2 bg-gray-200 dark:bg-stone-800 rounded">
-                {JSON.stringify(metadata.debug.lastValidPoint, null, 2)}
-              </pre>
-            </div>
-          )}
+          ))}
         </div>
       </div>
     );
@@ -213,7 +155,7 @@ export default function ProcessPage() {
               <h1 className="text-2xl font-bold">Processing: {filename}</h1>
               {metadata && (
                 <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
-                  Total points: {metadata.totalPoints.toLocaleString()}
+                  Total valid points found: {points.length.toLocaleString()} / {metadata.totalPointsInFile.toLocaleString()} (Invalid: {metadata.invalidPointsDetected})
                 </p>
               )}
             </div>
@@ -224,27 +166,23 @@ export default function ProcessPage() {
               >
                 {showDebug ? 'Hide Debug' : 'Show Debug'}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={toggleViewMode}
-                disabled={loading}
-              >
-                {isSampledView ? 'Switch to Full View' : 'Switch to Sampled View'}
-              </Button>
               <Button variant="outline" onClick={handleBackToHome}>
                 Back to Home
               </Button>
             </div>
           </div>
           
-          <div className="space-y-4">
-            <DriveMap 
-              points={points} 
-              metadata={metadata || undefined}
-              onLoadMore={!isSampledView ? handleLoadMore : undefined}
-            />
-            {showDebug && renderDebugInfo()}
-          </div>
+          {loading && <div className="text-center py-8">Loading all data...</div>}
+          {error && <div className="text-red-500 text-center py-8">Error: {error}</div>}
+          
+          {!loading && !error && (
+            <div className="space-y-4">
+              <DriveMap 
+                points={points} 
+              />
+              {showDebug && renderDebugInfo()}
+            </div>
+          )}
         </div>
       </main>
     </div>
