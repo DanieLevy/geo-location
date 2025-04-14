@@ -1,15 +1,17 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import dynamic from 'next/dynamic';
 import { DrivePoint } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2 } from "lucide-react";
-import { ArrowLeft } from "lucide-react";
+import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+import { getAiDriveSummary } from "@/lib/aiService";
 
 const DriveMap = dynamic(
   () => import('@/components/DriveMap'),
@@ -30,19 +32,20 @@ interface BackendResponseMetadata {
 
 export default function ProcessPage() {
   const searchParams = useSearchParams();
-  // Get multiple filenames from 'files' query param
   const filesQuery = searchParams.get('files'); 
   const filenames = filesQuery ? filesQuery.split(',') : [];
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [points, setPoints] = useState<DrivePoint[]>([]);
-  // Update metadata state type
   const [metadata, setMetadata] = useState<BackendResponseMetadata | null>(null);
   const [showDebug, setShowDebug] = useState(false);
 
-  const fetchData = async () => {
-    // Check if filenames array is empty
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
     if (filenames.length === 0) {
       setError('No files specified for processing.');
       setLoading(false);
@@ -52,7 +55,6 @@ export default function ProcessPage() {
     setError(null);
     try {
       console.log('Debug - Fetching data for:', filenames.join(','));
-      // Use the new endpoint and pass filenames in query
       const apiUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/csv-data?files=${encodeURIComponent(filenames.join(','))}`;
       const response = await fetch(apiUrl);
 
@@ -65,7 +67,6 @@ export default function ProcessPage() {
       console.log('Debug - Received aggregated data:', data);
 
       setPoints(data.points || []);
-      // Set the new metadata structure
       setMetadata({
         totalValidPoints: data.totalValidPoints || 0,
         totalInvalidPoints: data.totalInvalidPoints || 0,
@@ -73,18 +74,36 @@ export default function ProcessPage() {
         // validationErrors: data.validationErrors 
       });
 
-      setLoading(false);
     } catch (err: any) {
       console.error('Debug - Error fetching aggregated data:', err);
       setError(err.message || 'Failed to load or parse file data');
+    } finally {
       setLoading(false);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesQuery]);
 
   useEffect(() => {
     fetchData();
-    // Depend on filesQuery to refetch if query changes
-  }, [filesQuery]); 
+  }, [fetchData]); 
+
+  const handleGetSummary = async () => {
+    if (!filenames || filenames.length === 0) return;
+    
+    setSummaryLoading(true);
+    setSummaryText(null);
+    setSummaryError(null);
+
+    try {
+      const result = await getAiDriveSummary(filenames);
+      setSummaryText(result.summary);
+    } catch (err: any) {
+      console.error("AI Summary Fetch Error:", err);
+      setSummaryError(err.message || "Failed to get summary from AI");
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
 
   const handleBackToHome = () => {
     window.location.href = '/';
@@ -145,7 +164,7 @@ export default function ProcessPage() {
         <Card className="mb-6">
           <CardContent className="p-4">
              <div className="flex flex-wrap justify-between items-start gap-4">
-              <div>
+              <div className="flex-1 min-w-0">
                  <h1 className="text-2xl font-bold mb-1">Processing Files</h1>
                 <div className="flex flex-wrap gap-1">
                    {filenames.map(name => (
@@ -158,12 +177,16 @@ export default function ProcessPage() {
                   </p>
                 )}
               </div>
-              <div className="flex gap-2 shrink-0">
+              <div className="flex gap-2 shrink-0 items-center">
                  <Button
                   variant="secondary"
                   onClick={() => setShowDebug(!showDebug)}
                 >
                    {showDebug ? 'Hide Summary' : 'Show Summary'}
+                </Button>
+                <Button variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
+                  <Bot className="mr-2 h-4 w-4" />
+                  {summaryLoading ? 'Generating...' : 'Summarize with AI'}
                 </Button>
                 <Button variant="outline" onClick={handleBackToHome}>
                   Back to Home
@@ -172,6 +195,35 @@ export default function ProcessPage() {
             </div>
            </CardContent>
         </Card>
+
+        {summaryLoading || summaryText || summaryError && (
+          <Card className="mb-6">
+            <CardContent className="p-4">
+              {summaryLoading && (
+                <div className="flex items-center text-stone-600 dark:text-stone-400">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating AI summary...
+                </div>
+              )}
+              {summaryError && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error Generating Summary</AlertTitle>
+                  <AlertDescription>{summaryError}</AlertDescription>
+                </Alert>
+              )}
+              {summaryText && (
+                <Alert>
+                  <Terminal className="h-4 w-4" />
+                  <AlertTitle>AI Summary</AlertTitle>
+                  <AlertDescription className="whitespace-pre-wrap">
+                    {summaryText}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {showDebug && renderDebugInfo()}
 

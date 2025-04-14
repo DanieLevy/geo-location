@@ -6,7 +6,10 @@ import { FileUpload } from "@/components/FileUpload";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2, Loader2 } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2, Loader2, BrainCircuit } from "lucide-react";
+import { getAiChatCompletion } from "@/lib/aiService";
 
 interface UploadedFile {
   filename: string;
@@ -20,6 +23,12 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+
+  // --- AI State --- 
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiResponse, setAiResponse] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const fetchFiles = async () => {
     try {
@@ -73,6 +82,33 @@ export default function Home() {
 
   const handleUploadComplete = (filename: string) => {
     fetchFiles();
+  };
+
+  // --- AI Submit Handler --- 
+  const handleAiSubmit = async () => {
+    if (!aiQuery.trim()) return;
+
+    setAiLoading(true);
+    setAiResponse("");
+    setAiError(null);
+
+    try {
+      const payload = {
+        messages: [
+          { role: "system" as const, content: "You are a helpful assistant." }, // Example system prompt
+          { role: "user" as const, content: aiQuery },
+        ],
+        // Optional: Specify model if needed, otherwise backend default is used
+        // model: "your-lm-studio-model-id"
+      };
+      const result = await getAiChatCompletion(payload);
+      setAiResponse(result.response);
+    } catch (err: any) {
+      console.error("AI Query Error:", err);
+      setAiError(err.message || "Failed to get response from AI");
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   return (
@@ -154,6 +190,46 @@ export default function Home() {
              )}
           </Card>
         </div>
+
+        {/* --- AI Interaction Section --- */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center">
+              <BrainCircuit className="mr-2 h-5 w-5 text-purple-600 dark:text-purple-400" /> Ask AI
+            </CardTitle>
+            <CardDescription>Enter a query to get insights from the AI.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid w-full gap-1.5">
+              <Label htmlFor="ai-query">Your Query</Label>
+              <Textarea 
+                placeholder="Type your message here..." 
+                id="ai-query" 
+                value={aiQuery}
+                onChange={(e) => setAiQuery(e.target.value)}
+                rows={3}
+                disabled={aiLoading}
+              />
+            </div>
+            <Button onClick={handleAiSubmit} disabled={aiLoading || !aiQuery.trim()} className="w-full">
+              {aiLoading ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...</>
+              ) : (
+                "Send Query to AI"
+              )}
+            </Button>
+            {(aiResponse || aiError) && (
+              <div className="mt-4 p-4 rounded-md bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700">
+                <h4 className="font-semibold mb-2 text-stone-800 dark:text-stone-200">AI Response:</h4>
+                {aiError ? (
+                  <p className="text-red-600 dark:text-red-400 text-sm">Error: {aiError}</p>
+                ) : (
+                  <p className="text-sm text-stone-700 dark:text-stone-300 whitespace-pre-wrap">{aiResponse}</p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </main>
     </div>
   );
