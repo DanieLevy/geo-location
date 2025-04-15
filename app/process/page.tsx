@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info, FileText, Clock, Milestone, Gauge, CheckCircle, PlusCircle, Mic, Image, BarChart2, Share2, MapPin, ChevronsUpDown, Menu, MessageSquare, Volume2, VolumeX as VolumeMute, ThumbsUp, ThumbsDown, ChevronDown, ChevronRight, Settings2, MoreVertical } from "lucide-react";
+import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info, FileText, Clock, Milestone, Gauge, CheckCircle, PlusCircle, Mic, Image, BarChart2, Share2, MapPin, ChevronsUpDown, Menu, MessageSquare, Volume2, VolumeX as VolumeMute, ThumbsUp, ThumbsDown, ChevronDown, ChevronRight, Settings2, MoreVertical, Sparkles, Lightbulb } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
 import { toast } from "sonner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { getAiDriveSummary, getAiDataChatCompletion, getAiModels, AiModelInfo } from "@/lib/aiService";
 
@@ -139,7 +140,52 @@ function formatDuration(totalSeconds: number): string {
     result += `${minutes}m `;
   }
   result += `${seconds}s`;
-  return result.trim();
+  return result.trim() || "0s"; // Ensure it never returns empty string
+}
+
+// Helper to identify stops
+function findStops(points: DrivePoint[], minStopDurationSeconds: number = 120): number {
+    let stopCount = 0;
+    let potentiallyStopping = false;
+    let stopStartTime: Date | null = null;
+
+    for (let i = 1; i < points.length; i++) {
+        const prevPoint = points[i-1];
+        const currentPoint = points[i];
+
+        // Safely access speed, default to a high value if undefined to prevent false stop detection
+        const currentSpeed = currentPoint.speedKmh ?? 999;
+        const prevSpeed = prevPoint.speedKmh ?? 999;
+        const prevTimestamp = prevPoint.timestamp;
+
+        if (currentSpeed < 2 && prevSpeed < 2) { // Speed threshold for stop
+            if (!potentiallyStopping && prevTimestamp) { // Ensure timestamp exists
+                potentiallyStopping = true;
+                stopStartTime = new Date(prevTimestamp); // Timestamp is now guaranteed to be a string
+            }
+        } else {
+            if (potentiallyStopping && stopStartTime && prevTimestamp) { // Ensure timestamps exist
+                const stopEndTime = new Date(prevTimestamp); // Stop ended at the last low-speed point
+                const durationSeconds = (stopEndTime.getTime() - stopStartTime.getTime()) / 1000;
+                if (durationSeconds >= minStopDurationSeconds) {
+                    stopCount++;
+                }
+            }
+            potentiallyStopping = false;
+            stopStartTime = null;
+        }
+    }
+    // Check if stopping at the very end of the data
+    const lastTimestamp = points[points.length - 1]?.timestamp;
+    if (potentiallyStopping && stopStartTime && lastTimestamp) { // Ensure timestamps exist
+         const stopEndTime = new Date(lastTimestamp);
+         const durationSeconds = (stopEndTime.getTime() - stopStartTime.getTime()) / 1000;
+         if (durationSeconds >= minStopDurationSeconds) {
+             stopCount++;
+         }
+    }
+
+    return stopCount;
 }
 
 export default function ProcessPage() {
@@ -179,6 +225,242 @@ export default function ProcessPage() {
   const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState<string | null>(null);
+
+  // New state variables for AI insights
+  const [autoInsights, setAutoInsights] = useState<string[]>([]);
+  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
+  const [currentInsightIndex, setCurrentInsightIndex] = useState(0);
+
+  // AI-enhanced statistics
+  const [aiStats, setAiStats] = useState<{
+    validPoints?: { value: string; note?: string };
+    duration?: { value: string; note?: string };
+    distance?: { value: string; note?: string };
+    avgSpeed?: { value: string; note?: string };
+    maxSpeed?: { value: string; note?: string };
+    invalid?: { value: string; note?: string };
+  }>({});
+  const [aiStatsLoading, setAiStatsLoading] = useState(false);
+
+  // --- DEBUG LOG --- Add console log here
+  console.log('ProcessPage Render - Loading:', loading, 'Metadata:', metadata ? 'Exists' : 'null', 'Points:', points.length, 'Insights:', autoInsights);
+
+  // Function to generate AI insights automatically
+  const generateAiInsights = useCallback(async () => {
+    if (!filenames || filenames.length === 0 || !points.length || !metadata) return;
+    
+    // Don't regenerate if we already have insights and aren't in loading state
+    if (autoInsights.length > 0 && !aiInsightsLoading) return;
+    
+    setAiInsightsLoading(true);
+    try {
+      // First try to get some basic insights while AI is generating
+      const quickInsights: string[] = [];
+      if (metadata.maxSpeedKmh) {
+        quickInsights.push(`Reached a top speed of ${metadata.maxSpeedKmh.toFixed(0)} km/h.`);
+      }
+      if (metadata.totalDistanceMeters && metadata.durationSeconds) {
+        quickInsights.push(`Covered ${(metadata.totalDistanceMeters / 1000).toFixed(1)} km in ${formatDuration(metadata.durationSeconds)}.`);
+      }
+      if (quickInsights.length > 0) {
+        setAutoInsights(quickInsights);
+      }
+      
+      // Prepare context for AI
+      const contextMessage = {
+        role: 'system' as const,
+        content: `You are analyzing GPS drive data. The data contains ${metadata.totalValidPoints} valid points, covering a journey of ${metadata.durationSeconds ? formatDuration(metadata.durationSeconds) : 'unknown duration'}. 
+        ${metadata.totalDistanceMeters ? `The total distance was ${(metadata.totalDistanceMeters / 1000).toFixed(1)} kilometers.` : ''}
+        ${metadata.avgSpeedKmh ? `The average speed was ${metadata.avgSpeedKmh.toFixed(0)} km/h.` : ''}
+        ${metadata.maxSpeedKmh ? `The maximum speed was ${metadata.maxSpeedKmh.toFixed(0)} km/h.` : ''}
+        
+        Generate 4-5 insightful observations about this drive. Each insight should be a single sentence and focus on different aspects: speed patterns, duration, distance, stops, or unusual patterns.
+        Format your response as a JSON array of strings, with each string being a single insight observation. Keep each insight under 120 characters.
+        Example format: ["Insight 1", "Insight 2", "Insight 3", "Insight 4"]`
+      };
+      
+      // Get AI insights
+      const result = await getAiDataChatCompletion({
+        filenames,
+        messages: [contextMessage],
+        model: selectedChatModel || undefined,
+        stream: false
+      });
+      
+      console.log('AI Insight response:', result.response);
+      
+      // Try to parse the response as JSON array
+      try {
+        let aiInsights: string[] = [];
+        // Check if the response is already JSON or needs parsing
+        if (typeof result.response === 'string') {
+          // Find anything that looks like a JSON array in the response
+          const jsonMatch = result.response.match(/\[[\s\S]*\]/);
+          if (jsonMatch) {
+            aiInsights = JSON.parse(jsonMatch[0]);
+          } else {
+            // Fallback: split by newlines and clean up
+            aiInsights = result.response
+              .split('\n')
+              .filter(line => line.trim().length > 0)
+              .map(line => line.replace(/^[0-9\-\*\•\.]+\s*/, '').trim()) // Remove list markers
+              .filter(line => line.length > 10 && line.length < 150); // Reasonable length for insights
+          }
+        }
+        
+        // Combine quick insights with AI insights if we have any
+        if (aiInsights.length > 0) {
+          setAutoInsights(aiInsights);
+        } else if (autoInsights.length === 0) {
+          // Fallback to basic insights if AI failed and we have no insights
+          generateBasicInsights();
+        }
+      } catch (parseError) {
+        console.error('Failed to parse AI insights:', parseError);
+        // Fallback to basic insights
+        if (autoInsights.length === 0) {
+          generateBasicInsights();
+        }
+      }
+    } catch (err) {
+      console.error('Error generating AI insights:', err);
+      // Fallback to basic insights
+      if (autoInsights.length === 0) {
+        generateBasicInsights();
+      }
+    } finally {
+      setAiInsightsLoading(false);
+    }
+  }, [filenames, metadata, points, selectedChatModel, autoInsights, aiInsightsLoading]);
+  
+  // Generate AI-enhanced statistics for key metrics
+  const generateAiStats = useCallback(async () => {
+    if (!filenames || filenames.length === 0 || !points.length || !metadata) return;
+    
+    // Don't regenerate if we already have stats and aren't in loading state
+    if (Object.keys(aiStats).length > 0 && !aiStatsLoading) return;
+    
+    setAiStatsLoading(true);
+    
+    // Initialize with basic metadata as fallback
+    const basicStats = {
+      validPoints: { 
+        value: metadata.totalValidPoints?.toLocaleString() || 'N/A'
+      },
+      duration: { 
+        value: metadata.durationSeconds ? formatDuration(metadata.durationSeconds) : 'N/A'
+      },
+      distance: { 
+        value: metadata.totalDistanceMeters ? `${(metadata.totalDistanceMeters / 1000).toFixed(1)} km` : 'N/A'
+      },
+      avgSpeed: { 
+        value: metadata.avgSpeedKmh ? `${metadata.avgSpeedKmh.toFixed(0)} km/h` : 'N/A' 
+      },
+      maxSpeed: { 
+        value: metadata.maxSpeedKmh ? `${metadata.maxSpeedKmh.toFixed(0)} km/h` : 'N/A'
+      },
+      invalid: { 
+        value: metadata.totalInvalidPoints?.toLocaleString() || 'N/A'
+      }
+    };
+    
+    // Set basic stats immediately while waiting for AI
+    setAiStats(basicStats);
+    
+    try {
+      // Prepare context for AI
+      const contextMessage = {
+        role: 'system' as const,
+        content: `You are analyzing GPS drive data. The data contains ${metadata.totalValidPoints} valid points, covering a journey of ${metadata.durationSeconds ? formatDuration(metadata.durationSeconds) : 'unknown duration'}. 
+        ${metadata.totalDistanceMeters ? `The total distance was ${(metadata.totalDistanceMeters / 1000).toFixed(1)} kilometers.` : ''}
+        ${metadata.avgSpeedKmh ? `The average speed was ${metadata.avgSpeedKmh.toFixed(0)} km/h.` : ''}
+        ${metadata.maxSpeedKmh ? `The maximum speed was ${metadata.maxSpeedKmh.toFixed(0)} km/h.` : ''}
+        
+        Analyze this drive data and provide AI-enhanced statistics with brief insights.
+        For each metric, add a short contextual note that gives the user additional understanding.
+        
+        Format your response as a JSON object with this structure:
+        {
+          "validPoints": {"value": "16,636", "note": "High density data captures detailed route patterns"},
+          "duration": {"value": "45m 20s", "note": "Typical commute time suggests routine travel"},
+          "distance": {"value": "28.3 km", "note": "Medium-range journey across urban environment"},
+          "avgSpeed": {"value": "37 km/h", "note": "Consistent with city driving conditions"},
+          "maxSpeed": {"value": "84 km/h", "note": "Highway segment detected with good flow"},
+          "invalid": {"value": "317", "note": "GPS signal interrupted briefly near tall buildings"}
+        }
+        
+        If a metric is missing in the original data, keep its value as "N/A" but still provide an insightful note about what this might mean.
+        Keep notes concise (under 60 characters).`
+      };
+      
+      // Get AI enhanced stats
+      const result = await getAiDataChatCompletion({
+        filenames,
+        messages: [contextMessage],
+        model: selectedChatModel || undefined,
+        stream: false
+      });
+      
+      console.log('AI Stats response:', result.response);
+      
+      // Try to parse the response as JSON
+      try {
+        // Check if the response is already JSON or needs parsing
+        if (typeof result.response === 'string') {
+          // Find anything that looks like a JSON object in the response
+          const jsonMatch = result.response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const aiEnhancedStats = JSON.parse(jsonMatch[0]);
+            // Merge the AI stats with our basic stats (as fallback)
+            setAiStats({
+              validPoints: aiEnhancedStats.validPoints || basicStats.validPoints,
+              duration: aiEnhancedStats.duration || basicStats.duration,
+              distance: aiEnhancedStats.distance || basicStats.distance,
+              avgSpeed: aiEnhancedStats.avgSpeed || basicStats.avgSpeed,
+              maxSpeed: aiEnhancedStats.maxSpeed || basicStats.maxSpeed,
+              invalid: aiEnhancedStats.invalid || basicStats.invalid
+            });
+          }
+        }
+      } catch (parseError) {
+        console.error('Failed to parse AI stats:', parseError);
+        // Keep the basic stats we already set
+      }
+    } catch (err) {
+      console.error('Error generating AI stats:', err);
+      // Keep the basic stats we already set
+    } finally {
+      setAiStatsLoading(false);
+    }
+  }, [filenames, metadata, points, selectedChatModel, aiStats, aiStatsLoading]);
+  
+  // Fallback function for basic insights
+  const generateBasicInsights = () => {
+    if (!points.length || !metadata) return;
+    
+    const insights: string[] = [];
+    if (metadata.maxSpeedKmh) {
+      insights.push(`Reached a top speed of ${metadata.maxSpeedKmh.toFixed(0)} km/h.`);
+    }
+    if (metadata.totalDistanceMeters && metadata.durationSeconds) {
+      insights.push(`Covered ${(metadata.totalDistanceMeters / 1000).toFixed(1)} km in ${formatDuration(metadata.durationSeconds)}.`);
+    }
+    const stops = findStops(points);
+    if (stops > 0) {
+      insights.push(`Detected ${stops} stop${stops > 1 ? 's' : ''} longer than 2 minutes.`);
+    }
+    if (metadata.avgSpeedKmh && metadata.maxSpeedKmh && metadata.maxSpeedKmh > metadata.avgSpeedKmh * 1.8) {
+      insights.push(`Average speed (${metadata.avgSpeedKmh.toFixed(0)} km/h) suggests varied traffic conditions.`);
+    }
+    if (metadata.totalInvalidPoints && metadata.totalValidPoints > 0) {
+      const invalidRatio = metadata.totalInvalidPoints / (metadata.totalValidPoints + metadata.totalInvalidPoints);
+      if (invalidRatio > 0.1) {
+        insights.push(`${(invalidRatio * 100).toFixed(0)}% of data points were marked invalid, indicating potential GPS issues.`);
+      }
+    }
+    setAutoInsights(insights.filter(i => i)); // Filter out any empty strings
+    setCurrentInsightIndex(0); // Reset index when insights change
+  };
 
   const fetchData = useCallback(async () => {
     if (filenames.length === 0) {
@@ -244,6 +526,31 @@ export default function ProcessPage() {
     };
     fetchModels();
   }, [fetchData]);
+
+  // Trigger AI insights generation when data is loaded
+  useEffect(() => {
+    if (points.length > 0 && metadata && !aiInsightsLoading) {
+      generateAiInsights();
+    }
+  }, [points, metadata, generateAiInsights, aiInsightsLoading]);
+
+  // Trigger AI stats generation when data is loaded
+  useEffect(() => {
+    if (points.length > 0 && metadata && !aiStatsLoading) {
+      generateAiStats();
+    }
+  }, [points, metadata, generateAiStats, aiStatsLoading]);
+
+  // Cycle through insights
+  useEffect(() => {
+    if (autoInsights.length > 1) {
+      const intervalId = setInterval(() => {
+        setCurrentInsightIndex((prevIndex) => (prevIndex + 1) % autoInsights.length);
+      }, 8000); // Change insight every 8 seconds
+
+      return () => clearInterval(intervalId); // Cleanup interval on unmount or when insights change
+    }
+  }, [autoInsights]);
 
   const handleGetSummary = async () => {
     if (!filenames || filenames.length === 0) return;
@@ -936,7 +1243,7 @@ export default function ProcessPage() {
     });
   };
 
-  if (loading) {
+  if (loading && !metadata) {
     return (
       <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -969,78 +1276,305 @@ export default function ProcessPage() {
 
   return (
     <div className="min-h-screen flex flex-col p-4 md:p-8 bg-stone-100 dark:bg-stone-950">
-      <header className="flex-shrink-0 mb-4 md:mb-6">
-        <Card>
-          <CardContent className="p-4 md:p-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 items-start">
-              <div className="md:col-span-1 space-y-2">
-                <h1 className="text-xl font-semibold flex items-center">
-                  <FileText className="mr-2 h-5 w-5 text-blue-600 dark:text-blue-400" /> Drive Data
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  Visualizing drive data from selected files. Use the map and chat below to explore.
-                </p>
-                <div className="pt-1">
-                  <span className="text-xs font-medium text-muted-foreground">Source File(s):</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {filenames.slice(0, 3).map(name => (
-                      <Badge key={name} variant="secondary" className="whitespace-nowrap text-xs font-normal" title={name}>{name.length > 25 ? name.substring(0, 22) + '...' : name}</Badge>
-                    ))}
-                    {filenames.length > 3 && (
-                      <Badge variant="outline" className="text-xs font-normal">+{filenames.length - 3} more</Badge>
-                    )}
+      <header className="flex-shrink-0 mb-6">
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 dark:from-blue-900 dark:to-indigo-950 shadow-lg">
+          {/* Abstract pattern background */}
+          <div className="absolute inset-0 opacity-10">
+            <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d="M0,0 L100,0 L100,100 L0,100 Z" fill="url(#grid-pattern)" />
+            </svg>
+            <defs>
+              <pattern id="grid-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+                <path d="M 10 0 L 0 0 0 10" fill="none" stroke="white" strokeWidth="0.5" />
+              </pattern>
+            </defs>
+          </div>
+          
+          {/* Header content */}
+          <div className="relative z-10 px-6 py-5">
+            <div className="flex flex-col md:flex-row gap-6">
+              {/* Left: Title and auto insights */}
+              <div className="md:w-1/2 space-y-4">
+                <div className="flex items-center space-x-3">
+                  <div className="h-10 w-10 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                    <FileText className="h-5 w-5 text-white" />
                   </div>
+                  <div>
+                    <h1 className="text-2xl font-bold text-white">Drive Data</h1>
+                    <p className="text-blue-100 text-sm">Analysis & Visualization</p>
+                  </div>
+                </div>
+                
+                {/* Source files */}
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  <div className="text-blue-100 text-xs font-medium mr-1">Source:</div>
+                  {filenames.slice(0, 2).map(name => (
+                    <Badge key={name} variant="secondary" className="bg-white/20 hover:bg-white/30 text-white border-none whitespace-nowrap text-xs font-normal" title={name}>
+                      {name.length > 20 ? name.substring(0, 17) + '...' : name}
+                    </Badge>
+                  ))}
+                  {filenames.length > 2 && (
+                    <Badge variant="secondary" className="bg-white/10 hover:bg-white/20 text-white border-none text-xs font-normal">
+                      +{filenames.length - 2} more
+                    </Badge>
+                  )}
                 </div>
               </div>
 
-              <div className="md:col-span-1 space-y-3 bg-stone-50 dark:bg-stone-900 p-3 rounded-md border">
-                 <h2 className="text-sm font-medium text-muted-foreground border-b pb-1 mb-2">Key Statistics</h2>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                  <div className="flex items-center" title="Total Valid Points">
-                     <CheckCircle className="mr-1.5 h-4 w-4 text-green-600" /> 
-                     <span className="font-medium">{metadata?.totalValidPoints?.toLocaleString() ?? 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Valid Pts</span>
+              {/* Right: Key stats card */}
+              <div className="md:w-1/2 relative">
+                <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-blue-500/20 blur-2xl"></div>
+                <div className="relative p-4 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
+                  <div className="flex justify-between items-center mb-3">
+                    <h2 className="text-sm font-medium text-white">Key Statistics</h2>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="ghost" className="h-7 px-2.5 text-xs text-blue-100 hover:text-white hover:bg-white/10" onClick={handleGetSummary} disabled={summaryLoading}>
+                        <Bot className="mr-1.5 h-3.5 w-3.5" />{summaryLoading ? 'Generating...' : 'AI Summary'}
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 px-2.5 text-xs text-blue-100 hover:text-white hover:bg-white/10" onClick={handleBackToHome}>
+                        <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />Back
+                      </Button>
+                    </div>
                   </div>
-                   <div className="flex items-center" title="Approximate Duration">
-                     <Clock className="mr-1.5 h-4 w-4 text-blue-600" /> 
-                     <span className="font-medium">{metadata?.durationSeconds ? formatDuration(metadata.durationSeconds) : 'N/A'}</span>
-                  </div>
-                   <div className="flex items-center" title="Approximate Distance">
-                     <Milestone className="mr-1.5 h-4 w-4 text-purple-600" /> 
-                     <span className="font-medium">{metadata?.totalDistanceMeters ? `${(metadata.totalDistanceMeters / 1000).toFixed(1)} km` : 'N/A'}</span>
-                  </div>
-                   <div className="flex items-center" title="Average Speed">
-                     <Gauge className="mr-1.5 h-4 w-4 text-orange-600" /> 
-                     <span className="font-medium">{metadata?.avgSpeedKmh ? `${metadata.avgSpeedKmh.toFixed(0)} km/h` : 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Avg</span>
-                  </div>
-                   <div className="flex items-center" title="Maximum Speed">
-                     <Gauge className="mr-1.5 h-4 w-4 text-red-600" /> 
-                     <span className="font-medium">{metadata?.maxSpeedKmh ? `${metadata.maxSpeedKmh.toFixed(0)} km/h` : 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Max</span>
-                  </div>
-                   <div className="flex items-center" title="Total Invalid Points">
-                     <AlertCircle className="mr-1.5 h-4 w-4 text-yellow-600" /> 
-                     <span className="font-medium">{metadata?.totalInvalidPoints?.toLocaleString() ?? 'N/A'}</span><span className="ml-1 text-muted-foreground text-xs">Invalid Pts</span>
-                  </div>
-                 </div>
-              </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <CheckCircle className="mr-1 h-3 w-3" /> Valid Points
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.validPoints?.value || (metadata?.totalValidPoints?.toLocaleString() ?? 'N/A')}
+                              {aiStats.validPoints?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.validPoints?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.validPoints.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
 
-              <div className="md:col-span-1 flex flex-col md:items-end gap-2">
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={handleGetSummary} disabled={summaryLoading}>
-                    <Bot className="mr-1.5 h-4 w-4" />{summaryLoading ? 'Generating...' : 'Summarize (AI)'}
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => setShowDebug(!showDebug)}>
-                     <Info className="mr-1.5 h-4 w-4" />{showDebug ? 'Hide Raw Summary' : 'Show Raw Summary'}
-                </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <Clock className="mr-1 h-3 w-3" /> Duration
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.duration?.value || (metadata?.durationSeconds ? formatDuration(metadata.durationSeconds) : 'N/A')}
+                              {aiStats.duration?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.duration?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.duration.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <Milestone className="mr-1 h-3 w-3" /> Distance
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.distance?.value || (metadata?.totalDistanceMeters ? `${(metadata.totalDistanceMeters / 1000).toFixed(1)} km` : 'N/A')}
+                              {aiStats.distance?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.distance?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.distance.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <Gauge className="mr-1 h-3 w-3" /> Avg Speed
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.avgSpeed?.value || (metadata?.avgSpeedKmh ? `${metadata.avgSpeedKmh.toFixed(0)} km/h` : 'N/A')}
+                              {aiStats.avgSpeed?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.avgSpeed?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.avgSpeed.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <Gauge className="mr-1 h-3 w-3" /> Max Speed
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.maxSpeed?.value || (metadata?.maxSpeedKmh ? `${metadata.maxSpeedKmh.toFixed(0)} km/h` : 'N/A')}
+                              {aiStats.maxSpeed?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.maxSpeed?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.maxSpeed.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="bg-white/10 p-2 rounded-lg group cursor-help">
+                            <div className="flex items-center text-xs text-blue-200 mb-1">
+                              <AlertCircle className="mr-1 h-3 w-3" /> Invalid
+                              {aiStatsLoading && <Loader2 className="ml-1 h-2 w-2 animate-spin" />}
+                            </div>
+                            <div className="text-white font-medium flex items-center">
+                              {aiStats.invalid?.value || (metadata?.totalInvalidPoints?.toLocaleString() ?? 'N/A')}
+                              {aiStats.invalid?.note && (
+                                <Sparkles className="ml-1 h-3 w-3 text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipTrigger>
+                        {aiStats.invalid?.note && (
+                          <TooltipContent side="bottom" className="max-w-[200px]">
+                            <p className="text-xs">{aiStats.invalid.note}</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 </div>
-                <div className="mt-auto md:mt-4">
-                   <Button size="sm" variant="outline" onClick={handleBackToHome}>
-                     <ArrowLeft className="mr-1.5 h-4 w-4" /> Back to Upload
-                </Button>
-                 </div>
               </div>
             </div>
-           </CardContent>
-        </Card>
+            
+            {/* AI Insights Bar */}
+            <div className="mt-5 bg-white/10 backdrop-blur-sm rounded-lg p-3 border border-white/20 relative overflow-hidden">
+              <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-amber-400 to-amber-600"></div>
+              <div className="flex items-center pl-3">
+                <div className="flex-shrink-0 mr-3">
+                  <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center">
+                    <Sparkles className="h-4 w-4 text-amber-400" />
+                  </div>
+                </div>
+                <div className="relative flex-grow min-h-[36px]">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-blue-200 font-medium mb-1 flex items-center">
+                      <Lightbulb className="h-3 w-3 mr-1 text-amber-400" /> 
+                      AI INSIGHTS
+                      {aiInsightsLoading && (
+                        <div className="ml-2 flex items-center text-xs text-blue-200/70">
+                          <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                          Analyzing...
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-1">
+                      {autoInsights.map((_, index) => (
+                        <button
+                          key={index}
+                          onClick={() => setCurrentInsightIndex(index)}
+                          className={cn(
+                            "h-1.5 rounded-full transition-all duration-300 ease-in-out",
+                            index === currentInsightIndex 
+                              ? "w-5 bg-amber-400" 
+                              : "w-1.5 bg-white/20 hover:bg-white/30"
+                          )}
+                          aria-label={`View insight ${index + 1}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <AnimatePresence mode="wait">
+                    {aiInsightsLoading && autoInsights.length === 0 ? (
+                      <motion.div
+                        key="loading"
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -5 }}
+                        transition={{ duration: 0.3 }}
+                        className="text-sm text-white/80 py-1"
+                      >
+                        <div className="flex items-center">
+                          <div className="flex space-x-1 mr-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce [animation-delay:-0.3s]"></div>
+                            <div className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce [animation-delay:-0.15s]"></div>
+                            <div className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"></div>
+                          </div>
+                          Generating AI insights about your drive data...
+                        </div>
+                      </motion.div>
+                    ) : autoInsights[currentInsightIndex] ? (
+                      <motion.div
+                        key={currentInsightIndex}
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -5 }}
+                        transition={{ duration: 0.3 }}
+                        className="text-sm text-white"
+                      >
+                        {autoInsights[currentInsightIndex]}
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="empty"
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -5 }}
+                        transition={{ duration: 0.3 }}
+                        className="text-sm text-white/80 italic"
+                      >
+                        No insights available yet...
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <div className="ml-3 flex-shrink-0">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    className="h-7 w-7 p-0 rounded-full text-blue-100 hover:text-white hover:bg-white/10"
+                    onClick={() => {
+                      if (aiInsightsLoading || autoInsights.length <= 1) return;
+                      setCurrentInsightIndex((prevIndex) => (prevIndex + 1) % autoInsights.length);
+                    }}
+                    disabled={aiInsightsLoading || autoInsights.length <= 1}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </header>
 
       {summaryLoading || summaryText || summaryError && (
