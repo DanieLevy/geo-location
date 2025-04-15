@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info, FileText, Clock, Milestone, Gauge, CheckCircle, PlusCircle, Mic, Image, BarChart2, Share2, MapPin, ChevronsUpDown, Menu, MessageSquare, Volume2, VolumeX as VolumeMute, ThumbsUp, ThumbsDown, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, ArrowLeft, Bot, Terminal, AlertCircle, User, Send, Info, FileText, Clock, Milestone, Gauge, CheckCircle, PlusCircle, Mic, Image, BarChart2, Share2, MapPin, ChevronsUpDown, Menu, MessageSquare, Volume2, VolumeX as VolumeMute, ThumbsUp, ThumbsDown, ChevronDown, ChevronRight, Settings2, MoreVertical } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -25,6 +25,71 @@ import { toast } from "sonner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import { getAiDriveSummary, getAiDataChatCompletion, getAiModels, AiModelInfo } from "@/lib/aiService";
+
+// --- Start: Web Speech API Type Definitions ---
+// Based on MDN and common usage
+interface SpeechRecognitionEvent extends Event {
+  readonly resultIndex: number;
+  readonly results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionResultList {
+  readonly length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  readonly isFinal: boolean;
+  readonly length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  readonly transcript: string;
+  readonly confidence: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  readonly error: string; // e.g., 'no-speech', 'audio-capture', 'not-allowed'
+  readonly message: string;
+}
+
+// Define the constructor interface
+interface SpeechRecognitionStatic {
+  new (): SpeechRecognition;
+}
+
+// Define the instance interface
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onaudiostart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onaudioend: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
+  onnomatch: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onsoundstart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onsoundend: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onspeechstart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onspeechend: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  abort(): void;
+  start(): void;
+  stop(): void;
+}
+
+// Extend the Window interface
+interface CustomWindow extends Window {
+  SpeechRecognition?: SpeechRecognitionStatic;
+  webkitSpeechRecognition?: SpeechRecognitionStatic;
+}
+declare let window: CustomWindow;
+// --- End: Web Speech API Type Definitions ---
 
 const DriveMap = dynamic(
   () => import('@/components/DriveMap'),
@@ -108,6 +173,7 @@ export default function ProcessPage() {
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null); // Ref for SpeechRecognition instance
 
   const [aiModels, setAiModels] = useState<AiModelInfo[]>([]);
   const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
@@ -209,36 +275,100 @@ export default function ProcessPage() {
 
   // Handle voice input
   const handleVoiceInput = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
       toast.error("Speech Recognition Not Supported", {
         description: "Your browser doesn't support speech recognition.",
       });
       return;
     }
 
-    // Toggle listening state
-    setIsListening(prev => !prev);
-
-    if (!isListening) {
-      // Simulate speech recognition for demo purposes
-      toast("Listening...", {
-        description: "Say something about the drive data.",
-      });
-      
-      // Simulate recognition after 3 seconds
-      setTimeout(() => {
-        const fakeSpeechResult = "What was the maximum speed during this journey?";
-        setChatInput(fakeSpeechResult);
-        setIsListening(false);
-        toast.success("Speech Recognized", {
-          description: `"${fakeSpeechResult}"`,
-        });
-      }, 3000);
-    } else {
+    if (isListening) {
       // Stop listening
-      toast.info("Stopped Listening", {
-        description: "Voice input canceled."
-      });
+      recognitionRef.current?.stop();
+      setIsListening(false); // Directly set state here, onend will also fire
+      // Consider removing the toast here if onend handles UI updates
+      // toast.info("Stopped Listening", {
+      //   description: "Voice input canceled."
+      // });
+    } else {
+      // Start listening
+      if (recognitionRef.current) {
+        // Clean up previous instance if somehow exists
+        recognitionRef.current.abort();
+      }
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false; // Capture a single utterance
+      recognitionRef.current.interimResults = false; // We only want the final result
+      recognitionRef.current.lang = 'en-US'; // Or make this configurable
+
+      recognitionRef.current.onstart = () => {
+        setIsListening(true);
+        toast("Listening...", {
+          description: "Speak now.",
+          duration: 5000, // Show for 5 seconds or until stopped/result
+        });
+      };
+
+      recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
+        const transcript = event.results[0][0].transcript;
+        setChatInput(transcript);
+        toast.success("Speech Recognized", {
+          description: `"${transcript}"`,
+        });
+        // Optionally send message immediately after recognition
+        // handleSendChatMessage();
+      };
+
+      recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error("Speech recognition error:", event.error, event.message);
+        let errorMessage = "An unknown error occurred during speech recognition.";
+        switch (event.error) {
+          case 'no-speech':
+            errorMessage = "No speech was detected. Please try again.";
+            break;
+          case 'audio-capture':
+            errorMessage = "Audio capture failed. Ensure microphone is connected and working.";
+            break;
+          case 'not-allowed':
+            errorMessage = "Microphone access denied. Please allow access in your browser settings.";
+            break;
+          case 'network':
+             errorMessage = "Network error during speech recognition. Check connection.";
+            break;
+          case 'aborted':
+            // This can happen if stop() or abort() is called, often expected.
+            console.log("Speech recognition aborted.");
+            // Don't show an error toast for manual aborts.
+            setIsListening(false); // Ensure state is correct
+            return; // Exit early, no error toast needed
+          default:
+            errorMessage = `Error: ${event.error}. ${event.message}`;
+        }
+        toast.error("Speech Recognition Error", {
+          description: errorMessage,
+        });
+        setIsListening(false); // Ensure listening state is reset on error
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+        console.log("Speech recognition ended.");
+        // Optional: Add a toast indicating listening finished if not handled elsewhere
+        // toast.info("Listening finished.");
+      };
+
+      try {
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error("Failed to start speech recognition:", error);
+        toast.error("Could not start listening", {
+          description: "Please ensure microphone permissions are granted and try again."
+        });
+        setIsListening(false);
+        recognitionRef.current = null; // Clear the ref if start failed
+      }
     }
   };
 
@@ -375,7 +505,7 @@ export default function ProcessPage() {
       role: 'system', 
       content: prepareSystemContext()
     };
-    
+
     const newUserMessage: ChatMessage = { role: 'user', content: chatInput };
     const newAssistantMessage: ChatMessage = { role: 'assistant', content: '', isStreaming: true };
     
@@ -402,7 +532,7 @@ export default function ProcessPage() {
       const payload = {
         filenames,
         messages: messagesForAi,
-        model: selectedChatModel,
+        model: selectedChatModel || undefined,
         stream: true,
         includeMetadata: true // Send metadata to the AI service
       };
@@ -482,7 +612,7 @@ export default function ProcessPage() {
           // Define isComponentMounted at the start of the function
           let isComponentMounted = true;
           
-          const result = await getAiDataChatCompletion(payload);
+      const result = await getAiDataChatCompletion(payload);
           let responseText = result.response;
           
           // For very large responses, use a more efficient approach
@@ -583,9 +713,9 @@ export default function ProcessPage() {
           return () => {
             isComponentMounted = false;
           };
-        } catch (error) {
+        } catch (error: unknown) {
           // Handle cancellation error silently
-          if (error.name === 'AbortError') {
+          if (error instanceof Error && error.name === 'AbortError') {
             console.log('Streaming was cancelled');
             return;
           }
@@ -680,6 +810,18 @@ export default function ProcessPage() {
     }
   }, [chatMessages]);
 
+  // Add cleanup for speech recognition
+  useEffect(() => {
+    // This runs when the component unmounts
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort(); // Use abort to stop immediately without firing 'onresult'
+        console.log("Speech recognition aborted on component unmount.");
+        recognitionRef.current = null;
+      }
+    };
+  }, []); // Empty dependency array ensures this runs only on mount and unmount
+
   const handleBackToHome = () => {
     window.location.href = '/';
   };
@@ -715,7 +857,7 @@ export default function ProcessPage() {
           </div>
           <ReactMarkdown 
             components={{
-              root: ({node, ...props}) => <div className="markdown-content text-[11px]" {...props} />,
+              p: ({node, ...props}) => <div className="markdown-content text-[11px]" {...props} />,
               strong: ({node, ...props}) => <span className="font-bold" {...props} />,
               em: ({node, ...props}) => <span className="italic" {...props} />,
               h1: ({node, ...props}) => <h1 className="text-sm font-bold mt-1.5 mb-1" {...props} />,
@@ -726,11 +868,10 @@ export default function ProcessPage() {
               li: ({node, ...props}) => <li className="ml-2" {...props} />,
               code: ({node, ...props}) => <code className="px-1 py-0.5 bg-stone-300/30 dark:bg-stone-700/30 rounded text-[0.9em]" {...props} />,
               pre: ({node, ...props}) => <pre className="my-1 p-2 bg-stone-200 dark:bg-stone-800 rounded-md overflow-x-auto text-[0.85em]" {...props} />,
-              p: ({node, ...props}) => <p className="mb-1 last:mb-0" {...props} />
             }}
           >
             {/* Only render first 10KB for preview */}
-            {content.substring(0, 10000)}...
+            {content.substring(0, 10000)}
           </ReactMarkdown>
           <div className="mt-2 text-center">
             <button 
@@ -759,7 +900,7 @@ export default function ProcessPage() {
     return (
       <ReactMarkdown 
         components={{
-          root: ({node, ...props}) => <div className="markdown-content text-[11px]" {...props} />,
+          p: ({node, ...props}) => <div className="markdown-content text-[11px]" {...props} />,
           strong: ({node, ...props}) => <span className="font-bold" {...props} />,
           em: ({node, ...props}) => <span className="italic" {...props} />,
           h1: ({node, ...props}) => <h1 className="text-sm font-bold mt-1.5 mb-1" {...props} />,
@@ -770,7 +911,6 @@ export default function ProcessPage() {
           li: ({node, ...props}) => <li className="ml-2" {...props} />,
           code: ({node, ...props}) => <code className="px-1 py-0.5 bg-stone-300/30 dark:bg-stone-700/30 rounded text-[0.9em]" {...props} />,
           pre: ({node, ...props}) => <pre className="my-1 p-2 bg-stone-200 dark:bg-stone-800 rounded-md overflow-x-auto text-[0.85em]" {...props} />,
-          p: ({node, ...props}) => <p className="mb-1 last:mb-0" {...props} />
         }}
       >
         {content}
@@ -936,116 +1076,105 @@ export default function ProcessPage() {
 
       {showDebug && <div className="flex-shrink-0 mb-4 md:mb-6">{renderDebugInfo()}</div>}
 
-      <main className="flex-grow flex flex-col md:flex-row gap-4 md:gap-6 overflow-hidden">
-        <div className="flex-grow w-full md:w-2/3 lg:w-3/4 h-[60vh] md:h-auto rounded-lg overflow-hidden shadow-md">
+      <main className="flex-grow flex flex-col md:flex-row gap-4 md:gap-6 min-h-0">
+        <div className="flex-grow w-full md:w-2/3 lg:w-3/4 h-[50vh] md:h-auto rounded-lg overflow-hidden shadow-md">
           <DriveMap points={points} highlightedPoints={highlightedPoints} />
         </div>
         
-        {/* New minimalist chat interface */}
-        <div className="flex-shrink-0 w-full md:w-1/3 lg:w-1/4 h-[40vh] md:h-auto">
-          <div className="h-full flex flex-col bg-white dark:bg-stone-900 rounded-xl overflow-hidden shadow-md border border-stone-200 dark:border-stone-800">
-            {/* Simplified header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-stone-800">
+        <div className="w-full md:w-1/3 lg:w-1/4 h-[40vh] md:h-auto flex flex-col">
+          <div className="h-full flex flex-col bg-white dark:bg-stone-900 rounded-lg overflow-hidden shadow-sm border border-stone-200 dark:border-stone-800 max-h-[550px]">
+            <div className="flex-shrink-0 flex items-center px-3 py-2 border-b border-stone-100 dark:border-stone-800">
               <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-500">
-                  <Bot className="h-3.5 w-3.5 text-white" />
+                <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center">
+                  <Bot size={12} className="text-white" />
                 </div>
-                <span className="text-sm font-medium">Data Assistant</span>
+                <span className="text-sm">Data Assistant</span>
               </div>
-              
-              <div className="flex items-center gap-2">
+              <div className="ml-auto flex items-center gap-2">
                 {chatMessages.length > 0 && (
                   <button 
                     onClick={handleClearChat}
-                    className="text-[10px] py-1 px-1.5 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800 rounded"
+                    className="text-xs text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
                   >
                     Clear
                   </button>
                 )}
-                
-                {/* Simplified model selector */}
-                <div className="relative">
-                  <Select 
-                    value={selectedChatModel ?? undefined} 
-                    onValueChange={(value) => setSelectedChatModel(value)}
-                  >
-                    <SelectTrigger 
-                      className="h-7 text-[10px] w-auto min-w-[80px] border-none bg-stone-100 dark:bg-stone-800 rounded-full focus:ring-0"
-                    >
-                      <div className="flex items-center gap-1 truncate">
-                        {modelsLoading ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <span className="truncate">{selectedChatModel ? selectedChatModel.split('/').pop() : "Select model"}</span>
-                        )}
-                      </div>
-                    </SelectTrigger>
-                    <SelectContent position="popper" sideOffset={5} className="text-xs">
-                      {modelsError ? (
-                        <SelectItem value="error" disabled className="text-red-500 dark:text-red-400">
-                          <AlertCircle className="h-3 w-3 mr-1 inline-block" />Error loading models
-                        </SelectItem>
+                <Select 
+                  value={selectedChatModel ?? undefined} 
+                  onValueChange={(value) => setSelectedChatModel(value)}
+                >
+                  <SelectTrigger className="h-6 text-xs w-auto min-w-[90px] border-none bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full">
+                    <div className="flex items-center gap-1 truncate">
+                      {modelsLoading ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
-                        aiModels
-                          .filter(m => m.type === 'llm' || m.type === 'vlm')
-                          .sort((a, b) => {
-                            if (a.state === 'loaded' && b.state !== 'loaded') return -1;
-                            if (a.state !== 'loaded' && b.state === 'loaded') return 1;
-                            return a.id.localeCompare(b.id);
-                          })
-                          .map(model => (
-                            <SelectItem 
-                              key={model.id} 
-                              value={model.id} 
-                              className="text-xs py-1"
-                            >
-                              <div className="flex items-center gap-2">
-                                <div className={cn(
-                                  "h-2 w-2 rounded-full",
-                                  model.state === 'loaded' ? "bg-green-500" : "bg-stone-300 dark:bg-stone-600"
-                                )} />
-                                <span className="truncate">{model.id.split('/').pop()}</span>
-                              </div>
-                            </SelectItem>
-                          ))
+                        <div className="flex items-center">
+                          <span className={cn(
+                            "h-1.5 w-1.5 rounded-full mr-1",
+                            selectedChatModel ? "bg-green-500" : "bg-stone-400"
+                          )} />
+                          <span className="truncate text-xs text-stone-500">{selectedChatModel ? selectedChatModel.split('/').pop() : "Select model"}</span>
+                        </div>
                       )}
-                    </SelectContent>
-                  </Select>
-                  
-                  {selectedChatModel && (
-                    <div className="absolute -top-1 -right-1 z-10">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                      </span>
                     </div>
-                  )}
-                </div>
+                  </SelectTrigger>
+                  <SelectContent position="popper" sideOffset={5} className="text-xs">
+                    {modelsError ? (
+                      <SelectItem value="error" disabled className="text-red-500 dark:text-red-400">
+                        <AlertCircle className="h-3 w-3 mr-1 inline-block" />Error loading models
+                      </SelectItem>
+                    ) : (
+                      aiModels
+                        .filter(m => m.type === 'llm' || m.type === 'vlm')
+                        .sort((a, b) => {
+                          if (a.state === 'loaded' && b.state !== 'loaded') return -1;
+                          if (a.state !== 'loaded' && b.state === 'loaded') return 1;
+                          return a.id.localeCompare(b.id);
+                        })
+                        .map(model => (
+                          <SelectItem 
+                            key={model.id} 
+                            value={model.id} 
+                            className="text-xs py-1"
+                          >
+                            <div className="flex items-center gap-2">
+                              <div className={cn(
+                                "h-2 w-2 rounded-full",
+                                model.state === 'loaded' ? "bg-green-500" : "bg-stone-300 dark:bg-stone-600"
+                              )} />
+                              <span className="truncate">{model.id.split('/').pop()}</span>
+                            </div>
+                          </SelectItem>
+                        ))
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             
-            {/* Chat messages area */}
-            <div className="flex-grow overflow-hidden relative">
-              <ScrollArea className="h-full p-3" ref={chatContainerRef}>
+            <div className="flex-grow overflow-hidden min-h-0 relative">
+              <ScrollArea className="h-full px-3 py-2" ref={chatContainerRef}>
                 <div className="space-y-3 pb-2">
                   {chatMessages.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center p-4 text-stone-500 dark:text-stone-400">
-                      <div className="w-12 h-12 mb-3 rounded-full bg-stone-100 dark:bg-stone-800 flex items-center justify-center">
-                        <MessageSquare className="h-6 w-6" />
+                    <div className="h-full flex flex-col items-center justify-center py-10 text-center">
+                      <div className="w-10 h-10 rounded-full bg-stone-100 dark:bg-stone-800 flex items-center justify-center mb-3">
+                        <MessageSquare className="h-5 w-5 text-stone-400" />
                       </div>
-                      <p className="text-xs mb-4">Ask questions about your driving data</p>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 max-w-[200px] mb-4">
+                        Ask questions about your drive data
+                      </p>
                       
-                      {/* Pill-style suggested prompts */}
+                      {/* Simplified suggested prompts */}
                       {showSuggestedPrompts && (
-                        <div className="flex flex-wrap gap-2 justify-center">
-                          {suggestedPrompts.map((prompt, i) => (
+                        <div className="space-y-1.5 w-full max-w-[250px]">
+                          {suggestedPrompts.map((prompt, index) => (
                             <button
-                              key={i}
+                              key={index}
+                              className="w-full text-left px-2.5 py-1.5 rounded text-xs bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 transition-colors"
                               onClick={() => {
                                 setChatInput(prompt);
                                 setShowSuggestedPrompts(false);
                               }}
-                              className="text-[10px] py-1.5 px-2.5 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-full text-stone-700 dark:text-stone-300 transition-colors"
                             >
                               {prompt}
                             </button>
@@ -1054,114 +1183,87 @@ export default function ProcessPage() {
                       )}
                     </div>
                   ) : (
+                    // Simplified message rendering
                     chatMessages.map((message, index) => {
-                      // Skip system messages in the UI
+                      // Skip system messages
                       if (message.role === 'system') return null;
                       
                       const isUser = message.role === 'user';
                       
                       return (
-                        <div 
-                          key={index} 
-                          className={cn(
-                            "flex gap-2 max-w-full group",
-                            isUser ? "justify-end" : "justify-start"
-                          )}
-                        >
-                          {/* Assistant avatar - only show for first message or after user messages */}
-                          {!isUser && (!chatMessages[index-1] || chatMessages[index-1]?.role === 'user') && (
-                            <div className="flex-shrink-0 h-5 w-5 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
-                              <Bot size={11} className="text-white" />
-                            </div>
-                          )}
-                          
-                          {/* Empty spacer to align messages when no avatar */}
-                          {!isUser && chatMessages[index-1] && chatMessages[index-1]?.role === 'assistant' && (
-                            <div className="w-5 flex-shrink-0" />
-                          )}
-                          
-                          {/* Message content */}
-                          <div 
-                            className={cn(
-                              "px-3 py-2 rounded-2xl text-[11px] max-w-[85%]",
-                              isUser 
-                                ? "bg-blue-500 text-white rounded-br-sm" 
-                                : "bg-stone-100 dark:bg-stone-800 rounded-bl-sm"
-                            )}
-                          >
-                            {/* Content Rendering */}
-                            {message.role === 'assistant' && message.isStreaming ? (
-                              <div className="relative">
-                                {renderMarkdown(message.content)}
-                                <span className="inline-block w-1 h-3 bg-blue-500 dark:bg-blue-400 ml-0.5 animate-pulse" />
-                              </div>
+                        <div key={index} className={cn(
+                          "flex",
+                          isUser ? "justify-end" : "justify-start"
+                        )}>
+                          <div className={cn(
+                            "max-w-sm px-2.5 py-1.5 rounded-lg text-xs",
+                            isUser 
+                              ? "bg-blue-500 text-white" 
+                              : "bg-stone-100 dark:bg-stone-800 text-stone-900 dark:text-stone-100"
+                          )}>
+                            {isUser ? (
+                              <div className="whitespace-pre-wrap">{message.content}</div>
                             ) : (
-                              message.role === 'assistant' ? (
-                                renderMarkdown(message.content)
-                              ) : (
-                                <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                              )
-                            )}
-                            
-                            {/* Visualization data (if present) */}
-                            {!isUser && message.visualData && (
-                              <div className="mt-2 p-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg">
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-[10px] font-medium">{message.visualData.data.title || "Data Visualization"}</span>
-                                </div>
-                                <div className="h-20 bg-stone-100 dark:bg-stone-800 rounded flex items-center justify-center">
-                                  <BarChart2 className="h-8 w-8 text-blue-400 dark:text-blue-600 opacity-50" />
-                                </div>
+                              <div>
+                                {message.isStreaming ? (
+                                  <div className="relative">
+                                    {renderMarkdown(message.content)}
+                                    <span className="inline-block w-1 h-3 bg-blue-500 dark:bg-blue-400 ml-0.5 animate-pulse" />
+                                  </div>
+                                ) : (
+                                  renderMarkdown(message.content)
+                                )}
+                                
+                                {message.visualData && (
+                                  <div className="mt-1.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded p-1.5">
+                                    <div className="text-[10px] font-medium mb-1">{message.visualData.data.title || "Data"}</div>
+                                    <div className="bg-stone-100 dark:bg-stone-800 rounded h-16 flex items-center justify-center">
+                                      <BarChart2 className="h-6 w-6 text-stone-400 opacity-50" />
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Minimalist feedback */}
+                                {!message.isStreaming && (
+                                  <div className="flex justify-end gap-2 mt-1 opacity-50 hover:opacity-100 transition-opacity">
+                                    <button 
+                                      onClick={() => handleFeedback(index, 'positive')}
+                                      className={cn(
+                                        "text-stone-400 hover:text-green-500",
+                                        message.feedback === 'positive' && "text-green-500"
+                                      )}
+                                      aria-label="Helpful"
+                                    >
+                                      <ThumbsUp size={10} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleFeedback(index, 'negative')}
+                                      className={cn(
+                                        "text-stone-400 hover:text-red-500",
+                                        message.feedback === 'negative' && "text-red-500"
+                                      )}
+                                      aria-label="Not helpful"
+                                    >
+                                      <ThumbsDown size={10} />
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
-                          
-                          {/* User avatar */}
-                          {isUser && (
-                            <div className="flex-shrink-0 h-5 w-5 rounded-full overflow-hidden bg-stone-200 dark:bg-stone-700 flex items-center justify-center">
-                              <User size={11} className="text-stone-500 dark:text-stone-300" />
-                            </div>
-                          )}
-                          
-                          {/* Feedback buttons shown on hover for AI messages */}
-                          {!isUser && !message.isStreaming && (
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -ml-6 mt-1 flex flex-col gap-1">
-                              <button 
-                                onClick={() => handleFeedback(index, 'positive')}
-                                className={cn(
-                                  "p-1 rounded-full hover:bg-stone-200 dark:hover:bg-stone-700",
-                                  message.feedback === 'positive' ? "text-green-600 dark:text-green-400" : "text-stone-400"
-                                )}
-                              >
-                                <ThumbsUp size={9} />
-                              </button>
-                              <button 
-                                onClick={() => handleFeedback(index, 'negative')}
-                                className={cn(
-                                  "p-1 rounded-full hover:bg-stone-200 dark:hover:bg-stone-700",
-                                  message.feedback === 'negative' ? "text-red-600 dark:text-red-400" : "text-stone-400"
-                                )}
-                              >
-                                <ThumbsDown size={9} />
-                              </button>
-                            </div>
-                          )}
                         </div>
                       );
                     })
                   )}
                   
-                  {/* Loading indicator */}
+                  {/* Minimal loading indicator */}
                   {chatLoading && !chatMessages.some(m => m.isStreaming) && (
-                    <div className="flex items-start gap-2">
-                      <div className="flex-shrink-0 h-5 w-5 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
-                        <Bot size={11} className="text-white" />
-                      </div>
-                      <div className="p-2 rounded-2xl bg-stone-100 dark:bg-stone-800 rounded-bl-sm">
-                        <div className="flex space-x-1.5 items-center"> 
-                          <span className="h-1.5 w-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                          <span className="h-1.5 w-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                          <span className="h-1.5 w-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce"></span>
+                    <div className="flex justify-start">
+                      <div className="bg-stone-100 dark:bg-stone-800 px-3 py-1.5 rounded-lg text-xs max-w-[85%]">
+                        <div className="flex space-x-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600 animate-bounce [animation-delay:-0.3s]"></div>
+                          <div className="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600 animate-bounce [animation-delay:-0.15s]"></div>
+                          <div className="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600 animate-bounce"></div>
                         </div>
                       </div>
                     </div>
@@ -1170,75 +1272,85 @@ export default function ProcessPage() {
               </ScrollArea>
             </div>
             
-            {/* Error message */}
-            {chatError && (
-              <div className="px-3 py-2 bg-red-100 dark:bg-red-900/30 border-t border-red-200 dark:border-red-800">
-                <p className="text-[10px] text-red-600 dark:text-red-400 flex items-center">
-                  <AlertCircle className="h-3 w-3 mr-1 flex-shrink-0" />
+            <div className="flex-shrink-0 px-3 py-2 border-t border-stone-100 dark:border-stone-800">
+              {chatError && (
+                <div className="mb-2 px-2 py-1 bg-red-50 dark:bg-red-900/20 rounded text-[10px] text-red-600 dark:text-red-400 flex items-center">
+                  <AlertCircle size={10} className="mr-1 flex-shrink-0" />
                   {chatError}
-                </p>
-              </div>
-            )}
-            
-            {/* Input area */}
-            <div className="flex-shrink-0 p-3 border-t border-stone-100 dark:border-stone-800">
-              <div className="relative">
-                <Input 
-                  value={chatInput} 
-                  onChange={(e) => setChatInput(e.target.value)} 
-                  placeholder="Ask about your driving data..." 
-                  className="pr-[90px] h-10 rounded-full text-xs bg-stone-100 dark:bg-stone-800 border-none focus-visible:ring-1 focus-visible:ring-offset-0 focus-visible:ring-blue-500"
-                  disabled={chatLoading}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && !chatLoading && (handleSendChatMessage(), e.preventDefault())}
-                />
-                
-                {/* Action buttons positioned inside input */}
-                <div className="absolute right-1 top-1 h-8 flex items-center gap-1">
-                  {/* Voice input */}
-                  <button
-                    onClick={handleVoiceInput}
-                    className={cn(
-                      "p-1.5 rounded-full transition-colors", 
-                      isListening
-                        ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 animate-pulse"
-                        : "text-stone-500 hover:bg-white dark:hover:bg-stone-700"
-                    )}
-                  >
-                    <Mic size={12} />
-                  </button>
-                  
-                  {/* Audio output toggle */}
-                  <button
-                    onClick={toggleAudioOutput}
-                    className={cn(
-                      "p-1.5 rounded-full transition-colors",
-                      audioOutput
-                        ? "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
-                        : "text-stone-500 hover:bg-white dark:hover:bg-stone-700"
-                    )}
-                  >
-                    {audioOutput ? <Volume2 size={12} /> : <VolumeMute size={12} />}
-                  </button>
-                  
-                  {/* Send button */}
-                  <button 
-                    className="h-8 w-8 rounded-full bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center disabled:opacity-50 disabled:pointer-events-none"
-                    onClick={handleSendChatMessage} 
-                    disabled={chatLoading || !chatInput.trim()}
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                  </button>
                 </div>
+              )}
+              
+              <div className="flex items-center gap-1">
+                <div className="relative flex-1">
+                  <Input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Message..."
+                    className="h-8 text-xs pl-2.5 pr-8 rounded-full bg-stone-100 dark:bg-stone-800 border-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                    disabled={chatLoading}
+                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendChatMessage()}
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex">
+                    <button
+                      className={cn(
+                        "p-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200",
+                        isListening && "text-red-500"
+                      )}
+                      onClick={handleVoiceInput}
+                      aria-label="Voice input"
+                    >
+                      <Mic size={14} />
+                    </button>
+                  </div>
+                </div>
+                
+                <button
+                  className={cn(
+                    "h-8 w-8 rounded-full flex items-center justify-center",
+                    chatInput.trim() && !chatLoading
+                      ? "bg-blue-500 hover:bg-blue-600 text-white" 
+                      : "bg-stone-200 dark:bg-stone-700 text-stone-400 dark:text-stone-500 cursor-not-allowed"
+                  )}
+                  disabled={!chatInput.trim() || chatLoading}
+                  onClick={handleSendChatMessage}
+                  aria-label="Send message"
+                >
+                  <Send size={14} />
+                </button>
               </div>
               
-              {/* Hidden file input for image upload */}
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*"
-                onChange={handleImageUpload}
-              />
+              {/* Ultra-minimal utility buttons */}
+              <div className="flex justify-between mt-1 px-1">
+                <button 
+                  onClick={() => fileInputRef.current?.click()} 
+                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+                  aria-label="Upload image"
+                >
+                  <Image size={12} />
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                />
+                
+                <button 
+                  onClick={toggleAudioOutput} 
+                  className={cn(
+                    "text-stone-400 hover:text-stone-600 dark:hover:text-stone-300",
+                    audioOutput && "text-blue-500"
+                  )}
+                  aria-label={audioOutput ? "Disable speech" : "Enable speech"}
+                >
+                  {audioOutput ? <Volume2 size={12} /> : <VolumeMute size={12} />}
+                </button>
+              </div>
+              
+              <div className="text-[8px] text-center text-stone-400 mt-1">
+                Local LLM
+              </div>
             </div>
           </div>
         </div>
