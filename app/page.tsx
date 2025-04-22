@@ -8,8 +8,9 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter }
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2, Loader2, BrainCircuit } from "lucide-react";
+import { FileSpreadsheet, Weight, CalendarDays, RefreshCw, ArrowRight, Trash2, Loader2, BrainCircuit, Bug } from "lucide-react";
 import { getAiChatCompletion } from "@/lib/aiService";
+import { CsvDebugger } from "@/components/CsvDebugger";
 
 interface UploadedFile {
   filename: string;
@@ -23,6 +24,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [showDebugger, setShowDebugger] = useState(false);
 
   // --- AI State --- 
   const [aiQuery, setAiQuery] = useState("");
@@ -84,6 +86,10 @@ export default function Home() {
     fetchFiles();
   };
 
+  const toggleDebugger = () => {
+    setShowDebugger(!showDebugger);
+  };
+
   // --- AI Submit Handler --- 
   const handleAiSubmit = async () => {
     if (!aiQuery.trim()) return;
@@ -114,7 +120,24 @@ export default function Home() {
   return (
     <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950">
       <main className="max-w-6xl mx-auto space-y-8">
-        <h1 className="text-4xl font-bold mb-8 text-center text-stone-800 dark:text-stone-200">CSV File Manager</h1>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <h1 className="text-4xl font-bold text-stone-800 dark:text-stone-200">CSV File Manager</h1>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={toggleDebugger}
+            className="flex items-center gap-2"
+          >
+            <Bug className="h-4 w-4" />
+            {showDebugger ? 'Hide CSV Debugger' : 'CSV Format Debugger'}
+          </Button>
+        </div>
+        
+        {showDebugger && (
+          <div className="mb-8">
+            <CsvDebugger onClose={toggleDebugger} />
+          </div>
+        )}
         
         <div className="grid gap-8 md:grid-cols-[1fr_2fr]">
           {/* Upload Section */}

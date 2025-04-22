@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { Button } from "@/components/ui/button";
 import dynamic from 'next/dynamic';
 import { DrivePoint } from '@/lib/types';
@@ -188,7 +188,24 @@ function findStops(points: DrivePoint[], minStopDurationSeconds: number = 120): 
     return stopCount;
 }
 
-export default function ProcessPage() {
+// Create a wrapper component that uses suspense
+export default function ProcessPageWrapper() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen p-8 bg-stone-100 dark:bg-stone-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+           <Loader2 className="h-12 w-12 text-stone-500 dark:text-stone-400 animate-spin" />
+           <p className="text-lg text-stone-600 dark:text-stone-300">Loading map data...</p>
+        </div>
+       </div>
+    }>
+      <ProcessPage />
+    </Suspense>
+  );
+}
+
+// Actual ProcessPage component with all the existing logic
+function ProcessPage() {
   const searchParams = useSearchParams();
   const filesQuery = searchParams.get('files'); 
   const filenames = filesQuery ? filesQuery.split(',') : [];
@@ -734,10 +751,12 @@ export default function ProcessPage() {
     // Disable highlighting by not setting any points (keep the function for compatibility)
     // setHighlightedPoints(indices); - removing this line
     
-    // Change toast to indicate highlighting is disabled
-    toast.info("Map Highlighting Disabled", {
-      description: `Highlighting map points has been disabled by user preference.`,
-    });
+    // Only show the toast if indices were actually provided 
+    if (indices && indices.length > 0) {
+      toast("Map Highlighting Request Detected", {
+        description: `The AI tried to highlight ${indices.length} points on the map, but this feature is currently disabled by user preference.`,
+      });
+    }
   };
 
   // Function to add system context message before sending to AI
@@ -758,7 +777,8 @@ export default function ProcessPage() {
     // Add explanation of available capabilities
     systemContext += "You have these capabilities to help with data analysis:\n";
     systemContext += "1. You can access all GPS points in the dataset with their coordinates, speeds, and timestamps\n";
-    systemContext += "2. You can highlight specific points on the map using [[HIGHLIGHT:index1,index2,...]] tags\n";
+    // Updated to indicate highlighting is disabled
+    systemContext += "2. Map highlighting is currently disabled by user preference. Please do not use [[HIGHLIGHT:index1,index2,...]] tags.\n";
     systemContext += "3. You can generate charts and visualizations using [[CHART:type,title,data]] tags\n";
     systemContext += "4. You can analyze driving patterns, speeds, stops, and route characteristics\n\n";
     
@@ -852,27 +872,25 @@ export default function ProcessPage() {
         // Check for highlight command
         const highlightMatch = text.match(/\[\[HIGHLIGHT:([0-9,]+)\]\]/);
         if (highlightMatch && highlightMatch[1]) {
-          const indices = highlightMatch[1].split(',').map(idx => parseInt(idx.trim()));
-          
           // Clean the response text by removing the highlight command
           const cleanedText = text.replace(/\[\[HIGHLIGHT:[0-9,]+\]\]/, '');
           
-          // Update the message with highlight data and cleaned text
+          // Since highlighting is disabled, we'll just clean the text
+          // but won't set highlightPoints in the message
           setChatMessages(prev => {
-            // Safety check to make sure we have messages
             if (prev.length === 0) return prev;
             
             const newMessages = [...prev];
             const lastMessage = newMessages[newMessages.length - 1];
             if (lastMessage && lastMessage.role === 'assistant') {
               lastMessage.content = cleanedText;
-              lastMessage.highlightPoints = indices;
+              // Not setting highlightPoints here
             }
             return newMessages;
           });
           
-          // Highlight the points on the map
-          handleHighlightPoints(indices);
+          // Call the disabled highlight function which will show the toast
+          handleHighlightPoints([]);
           return cleanedText;
         }
         
@@ -1281,13 +1299,13 @@ export default function ProcessPage() {
           {/* Abstract pattern background */}
           <div className="absolute inset-0 opacity-10">
             <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <defs>
+                <pattern id="grid-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
+                  <path d="M 10 0 L 0 0 0 10" fill="none" stroke="white" strokeWidth="0.5" />
+                </pattern>
+              </defs>
               <path d="M0,0 L100,0 L100,100 L0,100 Z" fill="url(#grid-pattern)" />
             </svg>
-            <defs>
-              <pattern id="grid-pattern" patternUnits="userSpaceOnUse" width="10" height="10">
-                <path d="M 10 0 L 0 0 0 10" fill="none" stroke="white" strokeWidth="0.5" />
-              </pattern>
-            </defs>
           </div>
           
           {/* Header content */}
@@ -1577,7 +1595,7 @@ export default function ProcessPage() {
         </div>
       </header>
 
-      {summaryLoading || summaryText || summaryError && (
+      {(summaryLoading || summaryText || summaryError) && (
         <div className="flex-shrink-0 mb-4 md:mb-6">
           <Card>
             <CardContent className="p-4">

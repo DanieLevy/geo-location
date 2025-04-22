@@ -991,47 +991,66 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
     highlightedMarkersRef.current = [];
     
     // If there are no highlights, just return
-    if (!highlightedPoints || highlightedPoints.length === 0) return;
+    if (!highlightedPoints || highlightedPoints.length === 0) {
+      console.log('No highlighted points provided or highlighting is disabled');
+      return;
+    }
+    
+    console.log(`Adding ${highlightedPoints.length} highlighted points to map`);
     
     // Create highlights for the specified points
-    highlightedPoints.forEach(index => {
+    highlightedPoints.forEach((index, i) => {
       if (index >= 0 && index < points.length) {
         const point = points[index];
         if (point && point.lat && point.lng) {
           // Create a highlighted marker
-          const highlightMarker = L.circleMarker([point.lat, point.lng], {
-            radius: 15,
-            color: '#ff3b30',
-            weight: 3,
-            opacity: 0.8,
-            fillColor: '#ff9500',
-            fillOpacity: 0.3,
-            className: 'pulse-marker'
-          }).addTo(mapRef.current!);
-          
-          // Attach a popup with information
-          highlightMarker.bindPopup(`
-            <div class="p-2">
-              <div class="font-bold mb-1">Point #${index}</div>
-              <div>Lat: ${point.lat.toFixed(6)}</div>
-              <div>Lng: ${point.lng.toFixed(6)}</div>
-              ${point.speedKmh ? `<div>Speed: ${point.speedKmh.toFixed(1)} km/h</div>` : ''}
-              ${point.timestamp ? `<div>Time: ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
-            </div>
-          `);
-          
-          // Store the marker for later cleanup
-          highlightedMarkersRef.current.push(highlightMarker);
+          try {
+            const highlightMarker = L.circleMarker([point.lat, point.lng], {
+              radius: 15,
+              color: '#ff3b30',
+              weight: 3,
+              opacity: 0.8,
+              fillColor: '#ff9500',
+              fillOpacity: 0.3,
+              className: 'pulse-marker'
+            }).addTo(mapRef.current!);
+            
+            // Attach a popup with information
+            highlightMarker.bindPopup(`
+              <div class="p-2">
+                <div class="font-bold mb-1">Point #${index}</div>
+                <div>Lat: ${point.lat.toFixed(6)}</div>
+                <div>Lng: ${point.lng.toFixed(6)}</div>
+                ${point.speedKmh ? `<div>Speed: ${point.speedKmh.toFixed(1)} km/h</div>` : ''}
+                ${point.timestamp ? `<div>Time: ${new Date(point.timestamp).toLocaleTimeString()}</div>` : ''}
+              </div>
+            `);
+            
+            // Store the marker for later cleanup
+            highlightedMarkersRef.current.push(highlightMarker);
+          } catch (error) {
+            console.error(`Error creating highlight marker for point ${i} (index ${index}):`, error);
+          }
+        } else {
+          console.warn(`Invalid point data for highlight index ${index}`);
         }
+      } else {
+        console.warn(`Highlight index ${index} out of bounds (0-${points.length - 1})`);
       }
     });
     
     // If there are highlights, try to pan to the first one
     if (highlightedMarkersRef.current.length > 0) {
-      const bounds = L.latLngBounds(
-        highlightedMarkersRef.current.map(marker => marker.getLatLng())
-      );
-      mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+      try {
+        const bounds = L.latLngBounds(
+          highlightedMarkersRef.current.map(marker => marker.getLatLng())
+        );
+        if (bounds.isValid()) {
+          mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+        }
+      } catch (error) {
+        console.error('Error fitting bounds to highlighted markers:', error);
+      }
     }
   }, [highlightedPoints, points]);
 

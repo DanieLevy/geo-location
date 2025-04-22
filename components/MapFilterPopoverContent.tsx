@@ -35,7 +35,7 @@ export function MapFilterPopoverContent({ /* Destructure all props */
   handleManualInputChange, handleApplyManualFilter, handleDistanceToleranceChange,
   handleSetPresetSpeedFilter, handleManualSpeedInputChange, handleApplyManualSpeedFilter,
   handleSpeedToleranceChange
-}: MapFilterPopoverContentProps): JSX.Element {
+}: MapFilterPopoverContentProps) {
   return (
     <div className="grid gap-4">
       <div className="space-y-2">
