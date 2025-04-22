@@ -835,6 +835,9 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
     view: string;
     camera: string;
     fps: number;
+    secondsPerClip?: number; // Added new configurable option
+    startingClipNumber?: number; // Added new configurable option
+    customFilename?: string; // Added new configurable option for jump filename
   }>, 
   pointsToExport: DrivePoint[] 
   ) => {
@@ -865,29 +868,90 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
        const settings = settingsPerFile[sourceFile];
        const filePoints = pointsBySourceFile[sourceFile];
 
-       console.log(`Processing ${sourceFile}: ${filePoints.length} points, FPS: ${settings.fps}`);
+       // Get the user-configured settings or use defaults
+       const secondsPerClip = settings.secondsPerClip || 60; // Default to 60 seconds if not specified
+       const startingClipNumber = settings.startingClipNumber || 1; // Default to 1 if not specified
+       const framesPerClip = secondsPerClip * settings.fps; // Calculate frames per clip
+
+       console.log(`Processing ${sourceFile}: ${filePoints.length} points, FPS: ${settings.fps}, Seconds/Clip: ${secondsPerClip}, Starting Clip: ${startingClipNumber}`);
 
        if (filePoints.length === 0) continue; // Skip if no points for this file
 
-       // Calculate firstFrameId *based on this file's points*
-       const firstFrameId = Math.min(...filePoints.map(p => p.frameId));
-       console.log(`Using first frame ID for ${sourceFile}:`, firstFrameId);
+       // IMPORTANT: We need to find the TRUE first frameId in the entire dataset for this sourceFile
+       // This should be the absolute minimum frameId across all points with this sourceFile,
+       // not just the ones selected for export
+       let firstFrameId: number;
+        
+       // Find the true first frameId from the original points array
+       const allPointsFromSameSource = points.filter(p => p.sourceFile === sourceFile);
+       if (allPointsFromSameSource.length > 0) {
+         // This will get the true first frameId from ALL points with this sourceFile
+         firstFrameId = Math.min(...allPointsFromSameSource.map(p => p.frameId));
+         console.log(`Using TRUE first frame ID from all CSV data for ${sourceFile}: ${firstFrameId}`);
+       } else {
+         // Fallback to selected points if we somehow can't find the original source
+         firstFrameId = Math.min(...filePoints.map(p => p.frameId));
+         console.warn(`Warning: Using minimum frameId only from selected points: ${firstFrameId}. This may not be the true first frame from the CSV.`);
+       }
 
        // --- START: Filtering Logic (applied per file) ---
        const pointsByClip = new Map<number, DrivePoint[]>();
 
-       // 1. Calculate clip and group points for this file
+       // 1. Calculate clip and group points for this file - FIXED CALCULATION
        filePoints.forEach(point => {
+           // Improved calculation that correctly determines clip based on frame difference
            const frameDifference = point.frameId - firstFrameId;
            const nonNegativeFrameDiff = Math.max(0, frameDifference);
-           const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
-           // Ensure clipNumber is at least 1
-           const clipNumber = Math.max(1, Math.ceil(clipRaw)); 
+           
+           // Directly calculate which clip this frame belongs to using frames per clip
+           const clipRaw = nonNegativeFrameDiff / framesPerClip;
+           
+           // Apply clip number formula and apply starting clip offset
+           // Math.floor gets the clip the frame is in (0-based), then add starting clip number, ensuring it's at least the starting clip number
+           const clipNumber = Math.max(startingClipNumber, Math.floor(clipRaw) + startingClipNumber);
+           
+           // Log detailed information for significant frames
+           if (point.frameId % 5000 < 10) {
+               console.log(`Initial grouping calculation for frameId ${point.frameId}:
+               - First frame: ${firstFrameId}
+               - Frame difference: ${frameDifference}
+               - Frames per clip: ${framesPerClip} (${secondsPerClip}s × ${settings.fps}fps)
+               - Clip raw: ${clipRaw}
+               - Math.floor(clipRaw): ${Math.floor(clipRaw)}
+               - Adding starting clip: ${startingClipNumber}
+               - Final clip number: ${clipNumber}
+               `);
+           }
+           
+           // Validate clip calculation
+           if (isNaN(clipNumber)) {
+             console.error(`Invalid clip calculation for point with frameId ${point.frameId}:`, {
+               frameDifference,
+               nonNegativeFrameDiff,
+               framesPerClip,
+               clipRaw,
+               clipNumber
+             });
+             return; // Skip this point
+           }
 
+           // Store the point in the appropriate clip group
            if (!pointsByClip.has(clipNumber)) {
                pointsByClip.set(clipNumber, []);
            }
            pointsByClip.get(clipNumber)!.push(point);
+       });
+
+       // Add logging to verify clip numbers
+       const clipNumbers = Array.from(pointsByClip.keys()).sort((a, b) => a - b);
+       console.log(`Clips generated for ${sourceFile}: ${clipNumbers.join(', ')}`);
+       
+       // Debug output for clip frame ranges
+       clipNumbers.forEach(clipNum => {
+         const points = pointsByClip.get(clipNum)!;
+         const minFrameId = Math.min(...points.map(p => p.frameId));
+         const maxFrameId = Math.max(...points.map(p => p.frameId));
+         console.log(`Clip ${clipNum}: frames ${minFrameId}-${maxFrameId} (first frame: ${firstFrameId}, frames per clip: ${framesPerClip})`);
        });
 
        // 2. Select representative from each clip group based on time separation
@@ -933,12 +997,25 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
 
        // 3. Generate jump file lines using this file's points and settings
        const jumpFileLines = finalExportPoints.map(point => {
+           // Use the same clip calculation for consistency
            const frameDifference = point.frameId - firstFrameId;
            const nonNegativeFrameDiff = Math.max(0, frameDifference);
-           const clipRaw = nonNegativeFrameDiff / 60 / settings.fps;
-           // Ensure clipNumber is at least 1
-           const clipNumber = Math.max(1, Math.ceil(clipRaw)); 
+           const clipRaw = nonNegativeFrameDiff / framesPerClip;
+           const clipNumber = Math.max(startingClipNumber, Math.floor(clipRaw) + startingClipNumber);
            const clipFormatted = String(clipNumber).padStart(4, '0');
+
+           // Log detailed clip calculation for significant frames (every 1000th frame or so)
+           if (point.frameId % 1000 < 10 || point.frameId === finalExportPoints[0].frameId || point.frameId === finalExportPoints[finalExportPoints.length - 1].frameId) {
+               console.log(`Clip calculation for frameId ${point.frameId}:
+               - First frame: ${firstFrameId}
+               - Frame difference: ${frameDifference}
+               - Frames per clip: ${framesPerClip} (${secondsPerClip}s × ${settings.fps}fps)
+               - Clip raw: ${clipRaw}
+               - Math.floor(clipRaw): ${Math.floor(clipRaw)}
+               - Starting clip: ${startingClipNumber}
+               - Final clip number: ${clipNumber} (formatted: ${clipFormatted})
+               `);
+           }
 
            // Distance Label Logic - Use reference point state
            let distanceLabel = 'NoRef'; // Changed default label
@@ -961,7 +1038,13 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
        const url = URL.createObjectURL(blob);
        const link = document.createElement('a');
        link.setAttribute('href', url);
-       const safeFilename = settings.sessionName.replace(/[^a-z0-9_.-]/gi, '');
+       
+       // Use custom filename if provided, otherwise use sessionName as before
+       const customFilename = settings.customFilename?.trim();
+       const safeFilename = customFilename 
+         ? customFilename.replace(/[^a-z0-9_.-]/gi, '') 
+         : settings.sessionName.replace(/[^a-z0-9_.-]/gi, '');
+         
        link.setAttribute('download', `${safeFilename || sourceFile.replace(/\.csv$/i, '') || 'export'}.jump`);
        document.body.appendChild(link);
        link.click();
@@ -971,7 +1054,7 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
     }
     // End of loop through source files
 
-  }, [selectedObjectInfo, calculateDistance]); // Dependency updated
+  }, [selectedObjectInfo, calculateDistance, points]); // Added points to dependencies
 
   // --- NEW: Zoom Handler ---
   const handleZoomTo = useCallback((lat: number, lng: number) => {
@@ -1115,6 +1198,7 @@ export default function DriveMap({ points, onMarkerAdd, highlightedPoints }: Dri
           setPointsForJumpExport(null);
           setSourceFilesForJumpExport([]);
         }}
+        distanceFilter={distanceFilter}
       />
 
     </div>

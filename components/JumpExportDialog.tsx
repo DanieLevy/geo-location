@@ -20,6 +20,9 @@ interface SingleFileJumpSettings {
   view: string;
   camera: string;
   fps: number;
+  secondsPerClip?: number; // New: Allow configuration of seconds per clip
+  startingClipNumber?: number; // New: Allow configuration of starting clip number
+  customFilename?: string; // New: Allow a custom filename for the .jump file
 }
 
 // Type for settings per file
@@ -31,17 +34,21 @@ interface JumpExportDialogProps {
   onClose: () => void;
   // Updated onSubmit signature
   onSubmit: (settings: SettingsPerFile) => void;
+  distanceFilter: number | null; // Add distance filter information
 }
 
 const DEFAULT_VIEW = 's_AllSensors';
 const DEFAULT_CAMERA = 'main';
 const DEFAULT_FPS = 30;
+const DEFAULT_SECONDS_PER_CLIP = 60; // Default is 60 seconds per clip
+const DEFAULT_STARTING_CLIP = 1; // Default starting clip number
 
 export function JumpExportDialog({
   isOpen,
   sourceFiles,
   onClose,
   onSubmit,
+  distanceFilter = null, // Default to null if not provided
 }: JumpExportDialogProps) {
   
   // State to hold settings for each file
@@ -54,12 +61,23 @@ export function JumpExportDialog({
        const initialSettings: SettingsPerFile = {};
        sourceFiles.forEach(filename => {
          // Pre-fill sessionName based on filename (removing extension)
-         const suggestedSessionName = filename.replace(/\.csv$/i, '');
+         let suggestedSessionName = filename.replace(/\.csv$/i, '');
+         
+         // Remove _s_AllSensors from the session name if present
+         suggestedSessionName = suggestedSessionName.replace(/_s_AllSensors$/i, '');
+         
+         // Add distance filter suffix to the filename if a filter is applied
+         const distanceFilterSuffix = distanceFilter ? `_${distanceFilter}m` : '';
+         const suggestedFilename = `${suggestedSessionName}${distanceFilterSuffix}`;
+         
          initialSettings[filename] = settingsPerFile[filename] || { // Keep existing if already set
             sessionName: suggestedSessionName,
             view: DEFAULT_VIEW,
             camera: DEFAULT_CAMERA,
             fps: DEFAULT_FPS,
+            secondsPerClip: DEFAULT_SECONDS_PER_CLIP,
+            startingClipNumber: DEFAULT_STARTING_CLIP,
+            customFilename: suggestedFilename, // Include distance filter in filename
          };
        });
        setSettingsPerFile(initialSettings);
@@ -67,7 +85,7 @@ export function JumpExportDialog({
        // Reset when closing or if no files
        setSettingsPerFile({}); 
     }
-  }, [isOpen, sourceFiles]); // Rerun when files change or dialog opens/closes
+  }, [isOpen, sourceFiles, distanceFilter]); // Add distanceFilter as dependency
 
   // Handler to update state for a specific file and field
   const handleSettingChange = (
@@ -79,7 +97,11 @@ export function JumpExportDialog({
       ...prev,
       [filename]: {
         ...prev[filename],
-        [field]: field === 'fps' ? Number(value) || 0 : value, // Ensure FPS is number
+        [field]: 
+          // Ensure numeric fields are numbers
+          field === 'fps' || field === 'secondsPerClip' || field === 'startingClipNumber' 
+            ? Number(value) || 0 
+            : value,
       },
     }));
   };
@@ -107,6 +129,14 @@ export function JumpExportDialog({
        }
        if (!settings.camera?.trim()) {
          validationError = `Camera is required for ${filename}.`;
+         break;
+       }
+       if (isNaN(settings.secondsPerClip!) || settings.secondsPerClip! <= 0) {
+         validationError = `Seconds per clip must be a positive number for ${filename}.`;
+         break;
+       }
+       if (isNaN(settings.startingClipNumber!) || settings.startingClipNumber! < 0) {
+         validationError = `Starting clip number must be a non-negative number for ${filename}.`;
          break;
        }
      }
@@ -154,6 +184,22 @@ export function JumpExportDialog({
                          placeholder="Enter session name..."
                        />
                      </div>
+                     {/* Custom Filename for .jump file */}
+                     <div className="grid grid-cols-4 items-center gap-4">
+                       <Label htmlFor={`customFilename-${filename}`} className="text-right">
+                         Jump Filename
+                       </Label>
+                       <div className="col-span-3 flex items-center gap-2">
+                         <Input
+                           id={`customFilename-${filename}`}
+                           value={settingsPerFile[filename]?.customFilename || ''}
+                           onChange={(e) => handleSettingChange(filename, 'customFilename', e.target.value)}
+                           className="flex-1"
+                           placeholder="Enter filename for .jump file..."
+                         />
+                         <span className="text-sm text-muted-foreground whitespace-nowrap">.jump</span>
+                       </div>
+                     </div>
                      {/* View */}
                       <div className="grid grid-cols-4 items-center gap-4">
                        <Label htmlFor={`view-${filename}`} className="text-right">
@@ -192,6 +238,37 @@ export function JumpExportDialog({
                          className="col-span-3"
                        />
                      </div>
+                     {/* Seconds Per Clip */}
+                     <div className="grid grid-cols-4 items-center gap-4">
+                       <Label htmlFor={`secondsPerClip-${filename}`} className="text-right">
+                         Seconds Per Clip
+                       </Label>
+                       <div className="col-span-3 flex items-center gap-2">
+                         <Input
+                           id={`secondsPerClip-${filename}`}
+                           type="number"
+                           value={settingsPerFile[filename]?.secondsPerClip || 60}
+                           onChange={(e) => handleSettingChange(filename, 'secondsPerClip', e.target.value)}
+                           min="1"
+                           className="flex-1"
+                         />
+                         <span className="text-sm text-muted-foreground whitespace-nowrap">seconds</span>
+                       </div>
+                     </div>
+                     {/* Starting Clip Number */}
+                     <div className="grid grid-cols-4 items-center gap-4">
+                       <Label htmlFor={`startingClipNumber-${filename}`} className="text-right">
+                         Starting Clip Number
+                       </Label>
+                       <Input
+                         id={`startingClipNumber-${filename}`}
+                         type="number"
+                         value={settingsPerFile[filename]?.startingClipNumber || 1}
+                         onChange={(e) => handleSettingChange(filename, 'startingClipNumber', e.target.value)}
+                         min="1"
+                         className="col-span-3"
+                       />
+                     </div>
                    </div>
                  </AccordionContent>
               </AccordionItem>
@@ -214,4 +291,4 @@ export function JumpExportDialog({
       </DialogContent>
     </Dialog>
   );
-} 
+}
